@@ -13,7 +13,23 @@ export interface Tile {
   type: TileType;
   explored: boolean;
   visible: boolean;
+  /**
+   * Region type describes whether this tile belongs to a carved room or corridor space.
+   * Walls may not have a regionType, but passable tiles should always carry one so that
+   * searches and secret door placement can reason about connectivity.
+   */
+  regionType?: 'room' | 'corridor';
+  /** Flood-fill component identifier for the passable region this tile belongs to. */
+  regionId?: number;
+  /** Whether a hidden feature (trap/secret door) has been revealed. */
   revealed?: boolean;
+  /**
+   * When a secret door is placed, we remember which two regions it would connect so that
+   * revealing the door can relabel the dungeon consistently.
+   */
+  secretDoorLinks?: [number, number];
+  /** Whether a trap has already been triggered. */
+  triggered?: boolean;
   monsterId?: string | null;
   lootId?: string | null;
 }

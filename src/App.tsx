@@ -2,12 +2,15 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Gift, Heart, Map, Shield, Sparkles, Sword, Search } from 'lucide-react';
 import DungeonCanvas, { DungeonCanvasHandle } from './DungeonCanvas';
 import { CombatState, GameState, MonsterArchetype, MonsterInstance, Tile } from './types';
-import { generateDungeon } from './dungeonGen';
+import { generateDungeon, labelRegions } from './dungeonGen';
 import { computeVisibility } from './visibility';
 
 const GRID_SIZE = 16;
 const TILE_SIZE = 44;
 const VISION_RADIUS = 4;
+const MAX_LOG = 30;
+const SEARCH_DISTANCE = 10;
+const SEARCH_CHANCE = 0.85;
 
 const archetypes: MonsterArchetype[] = [
   { id: 'goblin', name: 'Goblin', glyph: 'g', maxHP: 10, atk: 3, def: 1, gold: 5, tier: 'minion' },
@@ -30,10 +33,20 @@ const roll = (min: number, max: number) => Math.floor(Math.random() * (max - min
 const NorseDungeonCrawler: React.FC = () => {
   const canvasRef = useRef<DungeonCanvasHandle | null>(null);
   const [game, setGame] = useState<GameState | null>(null);
+  const logContainerRef = useRef<HTMLDivElement | null>(null);
+  const logEndRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     initializeGame();
   }, []);
+
+  useEffect(() => {
+    if (!game) return;
+    const handle = requestAnimationFrame(() => {
+      logEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    });
+    return () => cancelAnimationFrame(handle);
+  }, [game?.log]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -53,11 +66,14 @@ const NorseDungeonCrawler: React.FC = () => {
 
     let tiles = baseTiles;
     tiles = placeTraps(tiles, start, boss);
-    tiles = placeSecretDoors(tiles);
     tiles = placeTreasures(tiles, start, boss);
+    tiles = labelRegions(tiles);
+    tiles = placeSecretDoors(tiles);
+    tiles = labelRegions(tiles);
 
     const { monstersById, tiles: withMonsters } = spawnMonsters(tiles, start, boss);
-    const visibility = computeVisibility(withMonsters, start, VISION_RADIUS);
+    const labeled = labelRegions(withMonsters);
+    const visibility = computeVisibility(labeled, start, VISION_RADIUS);
 
     const initialState: GameState = {
       gridSize: GRID_SIZE,
@@ -73,15 +89,8 @@ const NorseDungeonCrawler: React.FC = () => {
     setGame(initialState);
   };
 
-  const addLog = (message: string) => {
-    setGame((prev) =>
-      prev
-        ? {
-            ...prev,
-            log: [...prev.log.slice(-30), message]
-          }
-        : prev
-    );
+  const appendLog = (message: string) => {
+    setGame((prev) => (prev ? { ...prev, log: [...prev.log, message].slice(-MAX_LOG) } : prev));
   };
 
   const updateTiles = (tiles: Tile[][], x: number, y: number, updater: (tile: Tile) => Tile) => {
@@ -106,7 +115,7 @@ const NorseDungeonCrawler: React.FC = () => {
     while (placed < traps && candidates.length) {
       const idx = roll(0, candidates.length - 1);
       const { x, y } = candidates.splice(idx, 1)[0];
-      updated = updateTiles(updated, x, y, (tile) => ({ ...tile, type: 'trap', revealed: false }));
+      updated = updateTiles(updated, x, y, (tile) => ({ ...tile, type: 'trap', revealed: false, triggered: false }));
       placed++;
     }
 
@@ -134,8 +143,9 @@ const NorseDungeonCrawler: React.FC = () => {
     return updated;
   };
 
+  // Secret doors are only carved along boundaries between distinct passable regions.
   const placeSecretDoors = (tiles: Tile[][]) => {
-    const candidates: { x: number; y: number }[] = [];
+    const candidates: { x: number; y: number; regions: [number, number] }[] = [];
     const dirs = [
       { x: 1, y: 0 },
       { x: -1, y: 0 },
@@ -145,23 +155,37 @@ const NorseDungeonCrawler: React.FC = () => {
 
     for (let y = 1; y < tiles.length - 1; y++) {
       for (let x = 1; x < tiles[0].length - 1; x++) {
-        if (tiles[y][x].type !== 'wall') continue;
-        const neighbors = dirs.map((d) => tiles[y + d.y][x + d.x].type);
-        const connectsCorridor = neighbors.some((t) => t === 'corridor');
-        const connectsRoom = neighbors.some((t) => t === 'room');
-        if (connectsCorridor && connectsRoom) {
-          candidates.push({ x, y });
+        const tile = tiles[y][x];
+        if (tile.type !== 'wall') continue;
+
+        const neighborRegions = new Set<number>();
+        dirs.forEach((d) => {
+          const neighbor = tiles[y + d.y][x + d.x];
+          if (neighbor.regionId !== undefined) {
+            neighborRegions.add(neighbor.regionId);
+          }
+        });
+
+        if (neighborRegions.size >= 2) {
+          const [a, b] = Array.from(neighborRegions) as [number, number];
+          candidates.push({ x, y, regions: [a, b] });
         }
       }
     }
 
-    const secrets = Math.max(2, Math.min(4, candidates.length));
+    const secrets = candidates.length === 0 ? 0 : roll(1, Math.min(2, candidates.length));
     let updated = tiles;
     for (let i = 0; i < secrets && candidates.length; i++) {
       const idx = roll(0, candidates.length - 1);
-      const { x, y } = candidates.splice(idx, 1)[0];
-      updated = updateTiles(updated, x, y, (tile) => ({ ...tile, type: 'secretDoor', revealed: false }));
+      const { x, y, regions } = candidates.splice(idx, 1)[0];
+      updated = updateTiles(updated, x, y, (tile) => ({
+        ...tile,
+        type: 'secretDoor',
+        revealed: false,
+        secretDoorLinks: regions
+      }));
     }
+
     return updated;
   };
 
@@ -213,16 +237,16 @@ const NorseDungeonCrawler: React.FC = () => {
       const newX = prev.player.x + dx;
       const newY = prev.player.y + dy;
       if (newX < 0 || newY < 0 || newX >= prev.gridSize || newY >= prev.gridSize) {
-        addLog('You cannot go that way.');
+        appendLog('You cannot go that way.');
         return prev;
       }
       const target = prev.tiles[newY][newX];
       if (target.type === 'wall') {
-        addLog('A solid wall blocks the path.');
+        appendLog('A solid wall blocks the path.');
         return prev;
       }
       if (target.type === 'secretDoor' && !target.revealed) {
-        addLog('You sense a dead end here.');
+        appendLog('You sense a dead end here.');
         return prev;
       }
 
@@ -232,17 +256,17 @@ const NorseDungeonCrawler: React.FC = () => {
         player: { ...prev.player, x: newX, y: newY }
       };
 
-      if (target.type === 'trap') {
+      if (target.type === 'trap' && !target.triggered) {
         const damage = roll(5, 15);
-        addLog(`A hidden trap springs! You take ${damage} damage.`);
+        appendLog(`A hidden trap springs! You take ${damage} damage.`);
         nextState.player = { ...nextState.player, hp: Math.max(0, nextState.player.hp - damage) };
-        nextTiles = updateTiles(nextTiles, newX, newY, (tile) => ({ ...tile, type: 'corridor', revealed: true }));
+        nextTiles = updateTiles(nextTiles, newX, newY, (tile) => ({ ...tile, revealed: true, triggered: true }));
         canvasRef.current?.hitFlash('player');
       }
 
       if (target.type === 'treasure') {
         const gold = roll(10, 25);
-        addLog(`You find ${gold} gold.`);
+        appendLog(`You find ${gold} gold.`);
         nextState.player = { ...nextState.player, gold: nextState.player.gold + gold };
         nextTiles = updateTiles(nextTiles, newX, newY, (tile) => ({ ...tile, type: 'corridor', lootId: null }));
         canvasRef.current?.spawnParticles(newX, newY, 'treasure');
@@ -251,16 +275,17 @@ const NorseDungeonCrawler: React.FC = () => {
       if (target.monsterId) {
         const monster = prev.monstersById[target.monsterId];
         if (monster) {
-          addLog(`A ${prev.archetypesById[monster.archetypeId].name} engages you!`);
+          appendLog(`A ${prev.archetypesById[monster.archetypeId].name} engages you!`);
           nextState.combat = { active: true, monsterId: monster.id } as CombatState;
         }
       }
 
-      const withVisibility = computeVisibility(nextTiles, { x: newX, y: newY }, VISION_RADIUS);
+      const withRegions = labelRegions(nextTiles);
+      const withVisibility = computeVisibility(withRegions, { x: newX, y: newY }, VISION_RADIUS);
       nextState = { ...nextState, tiles: withVisibility };
 
       if (nextState.player.hp <= 0) {
-        addLog('You succumb to your wounds.');
+        appendLog('You succumb to your wounds.');
       }
 
       return nextState;
@@ -272,26 +297,32 @@ const NorseDungeonCrawler: React.FC = () => {
       if (!prev || prev.player.hp <= 0) return prev;
       const found: string[] = [];
       let tiles = prev.tiles;
-      for (let dy = -1; dy <= 1; dy++) {
-        for (let dx = -1; dx <= 1; dx++) {
-          const x = prev.player.x + dx;
-          const y = prev.player.y + dy;
-          if (x < 0 || y < 0 || x >= prev.gridSize || y >= prev.gridSize) continue;
+      const playerRegion = prev.tiles[prev.player.y][prev.player.x].regionId;
+
+      for (let y = 0; y < prev.gridSize; y++) {
+        for (let x = 0; x < prev.gridSize; x++) {
           const tile = tiles[y][x];
+          if (playerRegion === undefined || tile.regionId !== playerRegion) continue;
+          const dist = Math.hypot(prev.player.x - x, prev.player.y - y);
+          if (dist > SEARCH_DISTANCE) continue;
           if ((tile.type === 'trap' || tile.type === 'secretDoor') && !tile.revealed) {
-            if (Math.random() < 0.7) {
+            if (Math.random() < SEARCH_CHANCE) {
               tiles = updateTiles(tiles, x, y, (t) => ({ ...t, revealed: true }));
               found.push(tile.type === 'trap' ? 'trap' : 'secret door');
             }
           }
         }
       }
-      if (found.length === 0) {
-        addLog('You search the area but find nothing.');
-      } else {
-        addLog(`You discover ${found.join(' and ')} nearby!`);
-      }
-      return { ...prev, tiles };
+
+      const needsRelabel = found.some((f) => f === 'secret door');
+      const nextTiles = needsRelabel ? labelRegions(tiles) : tiles;
+      const chance = Math.round(SEARCH_CHANCE * 100);
+      const message =
+        found.length === 0
+          ? `You search carefully (${chance}% focus) but find nothing in this area.`
+          : `You discover ${found.join(' and ')} nearby!`;
+
+      return { ...prev, tiles: nextTiles, log: [...prev.log, message].slice(-MAX_LOG) };
     });
   };
 
@@ -305,7 +336,7 @@ const NorseDungeonCrawler: React.FC = () => {
       const rollValue = roll(1, 6);
       const damage = Math.max(1, prev.player.atk + rollValue - archetype.def);
       const newHP = monster.hp - damage;
-      addLog(`You strike the ${archetype.name} for ${damage} damage.`);
+      appendLog(`You strike the ${archetype.name} for ${damage} damage.`);
       canvasRef.current?.hitFlash('monster');
       let tiles = prev.tiles;
       let monsters = { ...prev.monstersById };
@@ -313,7 +344,7 @@ const NorseDungeonCrawler: React.FC = () => {
       let player = { ...prev.player };
 
       if (newHP <= 0) {
-        addLog(`The ${archetype.name} falls! +${archetype.gold} gold`);
+        appendLog(`The ${archetype.name} falls! +${archetype.gold} gold`);
         player = { ...player, gold: player.gold + archetype.gold };
         tiles = updateTiles(tiles, monster.pos.x, monster.pos.y, (tile) => ({ ...tile, monsterId: null }));
         delete monsters[monster.id];
@@ -338,13 +369,13 @@ const NorseDungeonCrawler: React.FC = () => {
     const damage = Math.max(1, archetype.atk + rollValue - state.player.def);
     const hp = state.player.hp - damage;
     const nextPlayer = { ...state.player, hp };
-    addLog(`The ${archetype.name} strikes you for ${damage} damage.`);
+    appendLog(`The ${archetype.name} strikes you for ${damage} damage.`);
     canvasRef.current?.hitFlash('player');
     if (damage >= 8) {
       canvasRef.current?.screenShake?.(240, 6);
     }
     if (hp <= 0) {
-      addLog('You fall to the dungeon floor...');
+      appendLog('You fall to the dungeon floor...');
     }
     return { ...state, player: nextPlayer };
   };
@@ -356,6 +387,46 @@ const NorseDungeonCrawler: React.FC = () => {
   if (!game) return null;
 
   const { player, tiles, combat, log, inventory } = game;
+
+  const legendItems: { label: string; style: React.CSSProperties; marker?: 'door' | 'secret' | 'trap' }[] = [
+    {
+      label: 'Wall',
+      style: {
+        backgroundColor: '#070910',
+        border: '2px solid #111827',
+        boxShadow: 'inset 0 0 0 2px rgba(255,255,255,0.08)'
+      }
+    },
+    {
+      label: 'Room',
+      style: {
+        backgroundColor: '#2f3f5b',
+        border: '1px solid rgba(255,255,255,0.15)',
+        backgroundImage:
+          'radial-gradient(circle at 20% 30%, rgba(255,255,255,0.15) 0%, rgba(255,255,255,0.15) 6%, transparent 8%), radial-gradient(circle at 70% 70%, rgba(255,255,255,0.1) 0%, rgba(255,255,255,0.1) 5%, transparent 7%)'
+      }
+    },
+    {
+      label: 'Corridor',
+      style: {
+        backgroundColor: '#1b2434',
+        border: '1px solid rgba(255,255,255,0.12)',
+        backgroundImage:
+          'repeating-linear-gradient(45deg, rgba(124,58,237,0.4), rgba(124,58,237,0.4) 6px, transparent 6px, transparent 12px)'
+      }
+    },
+    { label: 'Door', style: { backgroundColor: '#c0a16d', border: '2px solid #2b1f12' }, marker: 'door' },
+    {
+      label: 'Secret door',
+      style: { backgroundColor: '#070910', border: '2px dashed #7dd3fc' },
+      marker: 'secret'
+    },
+    {
+      label: 'Trap (revealed)',
+      style: { backgroundColor: '#1b2434', border: '2px solid rgba(251,146,60,0.8)' },
+      marker: 'trap'
+    }
+  ];
 
   return (
     <div className="w-full min-h-screen bg-gradient-to-br from-slate-900 via-blue-900 to-slate-900 p-4 flex flex-col items-center overflow-auto">
@@ -428,21 +499,39 @@ const NorseDungeonCrawler: React.FC = () => {
             </h2>
             <div className="bg-slate-950 p-3 rounded border-2 border-slate-800">
               <DungeonCanvas ref={canvasRef} tiles={tiles} player={player} combat={combat} tileSize={TILE_SIZE} />
-              <div className="mt-3 text-xs text-blue-200 grid grid-cols-2 gap-2">
-                <div>🧙 You | 💀 Monster | 👹 Boss</div>
-                <div>💰 Treasure | ⚠️ Trap | ❓ Secret</div>
+              <div className="mt-3 grid grid-cols-2 md:grid-cols-3 gap-2 text-xs text-blue-200">
+                {legendItems.map((item) => (
+                  <div key={item.label} className="flex items-center gap-2">
+                    <div className="w-9 h-6 rounded-sm relative overflow-hidden" style={item.style}>
+                      {item.marker === 'door' && (
+                        <div className="absolute inset-1 rounded-sm border border-amber-900 bg-amber-200/80" />
+                      )}
+                      {item.marker === 'secret' && (
+                        <div className="absolute inset-1 rounded-sm border border-sky-300 border-dashed" />
+                      )}
+                      {item.marker === 'trap' && (
+                        <div className="absolute inset-0 flex items-center justify-center text-amber-400 text-[11px] leading-none">▲</div>
+                      )}
+                    </div>
+                    <span>{item.label}</span>
+                  </div>
+                ))}
               </div>
             </div>
           </div>
 
           <div className="bg-slate-700 rounded-lg p-4 border-2 border-blue-600 flex flex-col h-full">
             <h2 className="text-xl font-bold text-blue-300 mb-3">📜 Game Log</h2>
-            <div className="bg-slate-900 rounded p-3 flex-1 overflow-y-auto text-sm text-blue-100 space-y-1">
+            <div
+              ref={logContainerRef}
+              className="bg-slate-900 rounded p-3 flex-1 overflow-y-auto text-sm text-blue-100 space-y-1"
+            >
               {log.map((entry, i) => (
                 <div key={i} className="border-b border-slate-700 pb-1">
                   {entry}
                 </div>
               ))}
+              <div ref={logEndRef} />
             </div>
 
             {combat.active && combat.monsterId && (
