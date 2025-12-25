@@ -230,7 +230,7 @@ const DungeonCanvas = forwardRef<DungeonCanvasHandle, DungeonCanvasProps>(({ til
       ctx.stroke();
     }
 
-    if (tile.type === 'trap' && (tile.revealed || combatRef.current.active)) {
+    if (tile.type === 'trap' && tile.revealed) {
       ctx.strokeStyle = '#fb923c';
       ctx.lineWidth = 2.5;
       ctx.beginPath();
@@ -312,40 +312,161 @@ const DungeonCanvas = forwardRef<DungeonCanvasHandle, DungeonCanvasProps>(({ til
     }
   };
 
-  const drawToken = (
+  const roundedRectPath = (
+    ctx: CanvasRenderingContext2D,
+    x: number,
+    y: number,
+    width: number,
+    height: number,
+    radius: number
+  ) => {
+    const r = Math.min(radius, width / 2, height / 2);
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.lineTo(x + width - r, y);
+    ctx.quadraticCurveTo(x + width, y, x + width, y + r);
+    ctx.lineTo(x + width, y + height - r);
+    ctx.quadraticCurveTo(x + width, y + height, x + width - r, y + height);
+    ctx.lineTo(x + r, y + height);
+    ctx.quadraticCurveTo(x, y + height, x, y + height - r);
+    ctx.lineTo(x, y + r);
+    ctx.quadraticCurveTo(x, y, x + r, y);
+    ctx.closePath();
+  };
+
+  const drawShadow = (ctx: CanvasRenderingContext2D, cx: number, cy: number, size: number) => {
+    ctx.save();
+    ctx.fillStyle = 'rgba(0,0,0,0.35)';
+    ctx.beginPath();
+    ctx.ellipse(cx, cy + size * 0.18, size * 0.22, size * 0.09, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  };
+
+  const drawPlayerToken = (ctx: CanvasRenderingContext2D, position: { x: number; y: number }, size: number) => {
+    const cx = position.x * size;
+    const cy = position.y * size;
+    const cloakGradient = ctx.createLinearGradient(cx, cy - size * 0.2, cx, cy + size * 0.3);
+    cloakGradient.addColorStop(0, '#34d399');
+    cloakGradient.addColorStop(1, '#0f766e');
+
+    drawShadow(ctx, cx, cy, size);
+
+    ctx.save();
+    ctx.fillStyle = cloakGradient;
+    ctx.strokeStyle = '#0f172a';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(cx - size * 0.18, cy - size * 0.02);
+    ctx.quadraticCurveTo(cx - size * 0.08, cy - size * 0.18, cx, cy - size * 0.18);
+    ctx.quadraticCurveTo(cx + size * 0.08, cy - size * 0.18, cx + size * 0.18, cy - size * 0.02);
+    ctx.lineTo(cx + size * 0.14, cy + size * 0.22);
+    ctx.quadraticCurveTo(cx, cy + size * 0.3, cx - size * 0.14, cy + size * 0.22);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.fillStyle = '#1f2937';
+    roundedRectPath(ctx, cx - size * 0.1, cy - size * 0.02, size * 0.2, size * 0.18, 6);
+    ctx.fill();
+
+    ctx.fillStyle = '#f9d4b5';
+    ctx.strokeStyle = '#0f172a';
+    ctx.beginPath();
+    ctx.arc(cx, cy - size * 0.2, size * 0.09, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.fillStyle = '#111827';
+    ctx.beginPath();
+    ctx.arc(cx, cy - size * 0.22, size * 0.11, Math.PI * 1.1, Math.PI * 2.1);
+    ctx.fill();
+
+    ctx.fillStyle = '#f8fafc';
+    roundedRectPath(ctx, cx - size * 0.22, cy + size * 0.02, size * 0.09, size * 0.16, 4);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.strokeStyle = '#e2e8f0';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(cx + size * 0.15, cy - size * 0.02);
+    ctx.lineTo(cx + size * 0.26, cy - size * 0.18);
+    ctx.stroke();
+
+    ctx.restore();
+  };
+
+  const drawMonsterToken = (
     ctx: CanvasRenderingContext2D,
     position: { x: number; y: number },
     size: number,
-    fill: string,
-    outline: string,
-    shadow: string
+    isBoss: boolean
   ) => {
-    const px = position.x * size;
-    const py = position.y * size;
-    const r = size * 0.32;
-    const cx = px + size / 2;
-    const cy = py + size / 2;
-    const gradient = ctx.createRadialGradient(cx - r * 0.3, cy - r * 0.3, r * 0.2, cx, cy, r * 1.1);
-    gradient.addColorStop(0, '#ffffff');
-    gradient.addColorStop(1, fill);
+    const cx = position.x * size;
+    const cy = position.y * size;
+    const scale = isBoss ? 1.1 : 1;
+    const bodyGradient = ctx.createLinearGradient(cx, cy - size * 0.2, cx, cy + size * 0.3);
+    bodyGradient.addColorStop(0, isBoss ? '#fb7185' : '#fb923c');
+    bodyGradient.addColorStop(1, isBoss ? '#be123c' : '#c2410c');
+
+    drawShadow(ctx, cx, cy, size * scale);
 
     ctx.save();
-    ctx.shadowColor = shadow;
-    ctx.shadowBlur = 12;
-    ctx.fillStyle = gradient;
-    ctx.strokeStyle = outline;
-    ctx.lineWidth = 3;
+    ctx.fillStyle = bodyGradient;
+    ctx.strokeStyle = '#1f2937';
+    ctx.lineWidth = 2.5;
     ctx.beginPath();
-    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.moveTo(cx - size * 0.2 * scale, cy - size * 0.02);
+    ctx.quadraticCurveTo(cx - size * 0.26 * scale, cy + size * 0.16, cx - size * 0.08 * scale, cy + size * 0.24);
+    ctx.quadraticCurveTo(cx, cy + size * 0.32, cx + size * 0.08 * scale, cy + size * 0.24);
+    ctx.quadraticCurveTo(cx + size * 0.26 * scale, cy + size * 0.16, cx + size * 0.2 * scale, cy - size * 0.02);
+    ctx.quadraticCurveTo(cx + size * 0.1 * scale, cy - size * 0.22, cx, cy - size * 0.22);
+    ctx.quadraticCurveTo(cx - size * 0.1 * scale, cy - size * 0.22, cx - size * 0.2 * scale, cy - size * 0.02);
+    ctx.closePath();
     ctx.fill();
     ctx.stroke();
-    ctx.restore();
 
-    ctx.strokeStyle = 'rgba(255,255,255,0.25)';
-    ctx.lineWidth = 2;
+    ctx.fillStyle = isBoss ? '#fecdd3' : '#fde68a';
     ctx.beginPath();
-    ctx.arc(cx - r * 0.35, cy - r * 0.35, r * 0.45, 0, Math.PI * 2);
+    ctx.arc(cx - size * 0.06 * scale, cy - size * 0.12, size * 0.04, 0, Math.PI * 2);
+    ctx.arc(cx + size * 0.06 * scale, cy - size * 0.12, size * 0.04, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.strokeStyle = '#111827';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(cx - size * 0.08 * scale, cy - size * 0.02);
+    ctx.lineTo(cx + size * 0.08 * scale, cy - size * 0.02);
     ctx.stroke();
+
+    ctx.fillStyle = '#111827';
+    ctx.beginPath();
+    ctx.moveTo(cx - size * 0.2 * scale, cy - size * 0.2);
+    ctx.lineTo(cx - size * 0.3 * scale, cy - size * 0.32);
+    ctx.lineTo(cx - size * 0.12 * scale, cy - size * 0.26);
+    ctx.closePath();
+    ctx.moveTo(cx + size * 0.2 * scale, cy - size * 0.2);
+    ctx.lineTo(cx + size * 0.3 * scale, cy - size * 0.32);
+    ctx.lineTo(cx + size * 0.12 * scale, cy - size * 0.26);
+    ctx.closePath();
+    ctx.fill();
+
+    if (isBoss) {
+      ctx.fillStyle = '#fef3c7';
+      ctx.beginPath();
+      ctx.moveTo(cx - size * 0.14, cy - size * 0.28);
+      ctx.lineTo(cx - size * 0.06, cy - size * 0.38);
+      ctx.lineTo(cx, cy - size * 0.3);
+      ctx.lineTo(cx + size * 0.06, cy - size * 0.38);
+      ctx.lineTo(cx + size * 0.14, cy - size * 0.28);
+      ctx.closePath();
+      ctx.fill();
+      ctx.strokeStyle = '#a16207';
+      ctx.stroke();
+    }
+
+    ctx.restore();
   };
 
   useEffect(() => {
@@ -406,9 +527,7 @@ const DungeonCanvas = forwardRef<DungeonCanvasHandle, DungeonCanvasProps>(({ til
         for (let x = 0; x < width; x++) {
           const tile = currentTiles[y][x];
           if (tile.visible && tile.monsterId) {
-            const fill = tile.type === 'boss' ? '#f43f5e' : '#f97316';
-            const outline = tile.type === 'boss' ? '#fecdd3' : '#fed7aa';
-            drawToken(ctx, { x, y }, size, fill, outline, 'rgba(248,113,113,0.8)');
+            drawMonsterToken(ctx, { x: x + 0.5, y: y + 0.5 }, size, tile.type === 'boss');
           }
         }
       }
@@ -419,7 +538,7 @@ const DungeonCanvas = forwardRef<DungeonCanvasHandle, DungeonCanvasProps>(({ til
         x: lerp(renderPlayerRef.current.x, targetPos.x, lerpSpeed),
         y: lerp(renderPlayerRef.current.y, targetPos.y, lerpSpeed)
       };
-      drawToken(ctx, renderPlayerRef.current, size, '#34d399', '#99f6e4', 'rgba(52,211,153,0.9)');
+      drawPlayerToken(ctx, renderPlayerRef.current, size);
 
       particlesRef.current = particlesRef.current.filter((p) => {
         p.life += dt;

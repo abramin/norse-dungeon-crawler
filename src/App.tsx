@@ -1,12 +1,12 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Gift, Heart, Map, Shield, Sparkles, Sword, Search } from 'lucide-react';
 import DungeonCanvas, { DungeonCanvasHandle } from './DungeonCanvas';
-import { CombatState, GameState, MonsterArchetype, Tile } from './types';
+import { CombatState, GameState, MonsterArchetype, MonsterInstance, Tile } from './types';
 import { generateDungeon } from './dungeonGen';
 import { computeVisibility } from './visibility';
 
-const GRID_SIZE = 18;
-const TILE_SIZE = 48;
+const GRID_SIZE = 16;
+const TILE_SIZE = 44;
 const VISION_RADIUS = 4;
 
 const archetypes: MonsterArchetype[] = [
@@ -34,6 +34,19 @@ const NorseDungeonCrawler: React.FC = () => {
   useEffect(() => {
     initializeGame();
   }, []);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement;
+      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return;
+      if (e.key === 'ArrowUp' || e.key === 'w' || e.key === 'W') tryMove(0, -1);
+      if (e.key === 'ArrowDown' || e.key === 's' || e.key === 'S') tryMove(0, 1);
+      if (e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A') tryMove(-1, 0);
+      if (e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D') tryMove(1, 0);
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  });
 
   const initializeGame = () => {
     const { tiles: baseTiles, start, boss } = generateDungeon(GRID_SIZE);
@@ -104,7 +117,7 @@ const NorseDungeonCrawler: React.FC = () => {
     const candidates: { x: number; y: number }[] = [];
     tiles.forEach((row, y) => {
       row.forEach((tile, x) => {
-        if ((tile.type === 'room' || tile.type === 'corridor') && tile.type !== 'trap' && !(x === start.x && y === start.y) && !(x === boss.x && y === boss.y)) {
+        if ((tile.type === 'room' || tile.type === 'corridor') && !(x === start.x && y === start.y) && !(x === boss.x && y === boss.y)) {
           candidates.push({ x, y });
         }
       });
@@ -196,7 +209,7 @@ const NorseDungeonCrawler: React.FC = () => {
 
   const tryMove = (dx: number, dy: number) => {
     setGame((prev) => {
-      if (!prev || prev.combat.active) return prev;
+      if (!prev || prev.combat.active || prev.player.hp <= 0) return prev;
       const newX = prev.player.x + dx;
       const newY = prev.player.y + dy;
       if (newX < 0 || newY < 0 || newX >= prev.gridSize || newY >= prev.gridSize) {
@@ -256,7 +269,7 @@ const NorseDungeonCrawler: React.FC = () => {
 
   const searchAround = () => {
     setGame((prev) => {
-      if (!prev) return prev;
+      if (!prev || prev.player.hp <= 0) return prev;
       const found: string[] = [];
       let tiles = prev.tiles;
       for (let dy = -1; dy <= 1; dy++) {
@@ -284,7 +297,7 @@ const NorseDungeonCrawler: React.FC = () => {
 
   const resolvePlayerAttack = () => {
     setGame((prev) => {
-      if (!prev || !prev.combat.active || !prev.combat.monsterId) return prev;
+      if (!prev || !prev.combat.active || !prev.combat.monsterId || prev.player.hp <= 0) return prev;
       const monster = prev.monstersById[prev.combat.monsterId];
       const archetype = monster ? prev.archetypesById[monster.archetypeId] : undefined;
       if (!monster || !archetype) return prev;
@@ -349,8 +362,8 @@ const NorseDungeonCrawler: React.FC = () => {
       <div className="max-w-[1600px] w-full bg-slate-800 rounded-lg shadow-2xl border-4 border-blue-700 p-6 my-4">
         <h1 className="text-4xl font-bold text-center mb-4 text-blue-200 drop-shadow-lg">⚔️ Norse Dungeon Crawler ⚔️</h1>
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-          <div className="space-y-4">
+        <div className="grid grid-cols-1 lg:grid-cols-[220px_1fr_280px] gap-4">
+          <div className="space-y-3">
             <div className="bg-slate-700 rounded-lg p-4 border-2 border-blue-600">
               <h2 className="text-xl font-bold text-blue-300 mb-3 flex items-center gap-2">
                 <Heart className="w-5 h-5" /> Hero Stats
@@ -422,9 +435,9 @@ const NorseDungeonCrawler: React.FC = () => {
             </div>
           </div>
 
-          <div className="bg-slate-700 rounded-lg p-4 border-2 border-blue-600">
+          <div className="bg-slate-700 rounded-lg p-4 border-2 border-blue-600 flex flex-col h-full">
             <h2 className="text-xl font-bold text-blue-300 mb-3">📜 Game Log</h2>
-            <div className="bg-slate-900 rounded p-3 h-40 overflow-y-auto text-sm text-blue-100 space-y-1">
+            <div className="bg-slate-900 rounded p-3 flex-1 overflow-y-auto text-sm text-blue-100 space-y-1">
               {log.map((entry, i) => (
                 <div key={i} className="border-b border-slate-700 pb-1">
                   {entry}
