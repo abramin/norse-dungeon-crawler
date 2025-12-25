@@ -26,10 +26,12 @@ interface Particle {
 }
 
 const palette: Record<string, string> = {
-  wall: '#0d101c',
-  room: '#2c3a4f',
-  corridor: '#1f2937',
-  door: '#9ca3af',
+  wall: '#070910',
+  wallSide: '#03040a',
+  wallDeep: '#010309',
+  room: '#2f3f5b',
+  corridor: '#1b2434',
+  door: '#c0a16d',
   secretDoor: '#7dd3fc',
   trap: '#f97316',
   treasure: '#facc15',
@@ -37,8 +39,19 @@ const palette: Record<string, string> = {
   boss: '#ef4444'
 };
 
+const RenderSettings = {
+  wallHeightPx: 12,
+  shadowStrength: 0.35,
+  shadowBlur: 14,
+  shadowReachTiles: 2
+};
+
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
+const pseudoRandom = (x: number, y: number, seed = 1) => {
+  const s = Math.sin(x * 374761393 + y * 668265263 + seed * 31.4159) * 43758.5453;
+  return s - Math.floor(s);
+};
 
 const DungeonCanvas = forwardRef<DungeonCanvasHandle, DungeonCanvasProps>(({ tiles, player, combat, tileSize = 48 }, ref) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -49,7 +62,6 @@ const DungeonCanvas = forwardRef<DungeonCanvasHandle, DungeonCanvasProps>(({ til
   const renderPlayerRef = useRef<{ x: number; y: number }>({ x: player.x + 0.5, y: player.y + 0.5 });
   const flashRef = useRef({ player: 0, monster: 0 });
   const shakeRef = useRef<{ until: number; intensity: number }>({ until: 0, intensity: 0 });
-  const patternsRef = useRef<Record<string, CanvasPattern | null>>({});
   const dprRef = useRef<number>(1);
   const tileSizeRef = useRef<number>(tileSize);
 
@@ -109,135 +121,102 @@ const DungeonCanvas = forwardRef<DungeonCanvasHandle, DungeonCanvasProps>(({ til
     tileSizeRef.current = tileSize;
   }, [tileSize]);
 
-  const createPattern = (type: 'stone' | 'plank' | 'hatch', base: string, accent: string) => {
-    const off = document.createElement('canvas');
-    off.width = 64;
-    off.height = 64;
-    const c = off.getContext('2d');
-    if (!c) return null;
-    c.fillStyle = base;
-    c.fillRect(0, 0, off.width, off.height);
+  const getLighting = (tile: Tile) => (tile.visible ? 1 : tile.explored ? 0.55 : 0.18);
 
-    c.lineWidth = type === 'plank' ? 4 : 2;
-    c.strokeStyle = accent;
-    c.globalAlpha = 0.2;
-    c.beginPath();
-    if (type === 'stone') {
-      for (let i = 8; i < 64; i += 16) {
-        c.moveTo(i, 0);
-        c.lineTo(i - 8, 64);
-      }
-      for (let j = 12; j < 64; j += 18) {
-        c.moveTo(0, j);
-        c.lineTo(64, j - 6);
-      }
-    } else if (type === 'plank') {
-      for (let i = 0; i <= 64; i += 16) {
-        c.moveTo(i, 0);
-        c.lineTo(i, 64);
-      }
-    } else {
-      for (let i = 0; i < 64; i += 8) {
-        c.moveTo(i, 0);
-        c.lineTo(i + 8, 64);
-      }
-    }
-    c.stroke();
-    c.globalAlpha = 0.08;
-    c.fillStyle = '#ffffff';
-    for (let i = 0; i < 14; i++) {
-      const x = Math.random() * 64;
-      const y = Math.random() * 64;
-      const r = Math.random() * 1.6 + 0.6;
-      c.beginPath();
-      c.arc(x, y, r, 0, Math.PI * 2);
-      c.fill();
-    }
-    return c.createPattern(off, 'repeat');
-  };
+  const getDisplayType = (tile: Tile) =>
+    tile.type === 'trap' && !tile.revealed && !tile.triggered
+      ? tile.regionType === 'room'
+        ? 'room'
+        : 'corridor'
+      : tile.type === 'secretDoor'
+      ? tile.revealed
+        ? 'door'
+        : 'wall'
+      : tile.type;
 
-  const drawTile = (ctx: CanvasRenderingContext2D, tile: Tile, x: number, y: number, size: number) => {
+  const isPassableDisplayType = (type: string) => type !== 'wall' && type !== 'secretDoor';
+
+  const drawFloorTile = (ctx: CanvasRenderingContext2D, tile: Tile, x: number, y: number, size: number) => {
+    const displayType = getDisplayType(tile);
+    if (displayType === 'wall' || displayType === 'door') return;
+
     const px = x * size;
     const py = y * size;
-    const radius = 6;
-    const isVisible = tile.visible;
-    const isExplored = tile.explored;
-    const lighting = isVisible ? 1 : isExplored ? 0.45 : 0.2;
+    const radius = 8;
+    const lighting = getLighting(tile);
+    const baseColor = palette[displayType] ?? palette.room;
 
-    const baseColor = palette[tile.type] ?? '#0f172a';
-    const gradient = ctx.createLinearGradient(px, py, px, py + size);
-    gradient.addColorStop(0, `${baseColor}ee`);
-    gradient.addColorStop(1, `${baseColor}aa`);
+    ctx.save();
+    roundedRectPath(ctx, px + 2, py + 2, size - 4, size - 4, radius);
 
-    ctx.fillStyle = gradient;
-    ctx.beginPath();
-    ctx.moveTo(px + radius, py);
-    ctx.lineTo(px + size - radius, py);
-    ctx.quadraticCurveTo(px + size, py, px + size, py + radius);
-    ctx.lineTo(px + size, py + size - radius);
-    ctx.quadraticCurveTo(px + size, py + size, px + size - radius, py + size);
-    ctx.lineTo(px + radius, py + size);
-    ctx.quadraticCurveTo(px, py + size, px, py + size - radius);
-    ctx.lineTo(px, py + radius);
-    ctx.quadraticCurveTo(px, py, px + radius, py);
-    ctx.closePath();
+    const fillGradient = ctx.createLinearGradient(px, py, px + size, py + size);
+    fillGradient.addColorStop(0, `${baseColor}`);
+    fillGradient.addColorStop(1, `${baseColor}cc`);
+    ctx.fillStyle = fillGradient;
     ctx.fill();
 
-    let patternKey: string | null = null;
-    if (tile.type === 'room') patternKey = 'stone';
-    if (tile.type === 'corridor') patternKey = 'hatch';
-    if (tile.type === 'door') patternKey = 'plank';
-    if (patternKey) {
-      if (!patternsRef.current[patternKey]) {
-        if (patternKey === 'stone') patternsRef.current[patternKey] = createPattern('stone', baseColor, '#9ca3af');
-        if (patternKey === 'hatch') patternsRef.current[patternKey] = createPattern('hatch', baseColor, '#7c3aed');
-        if (patternKey === 'plank') patternsRef.current[patternKey] = createPattern('plank', '#4b5563', '#111827');
+    const bevel = ctx.createLinearGradient(px, py, px + size, py + size);
+    bevel.addColorStop(0, `rgba(255,255,255,${0.12 * lighting})`);
+    bevel.addColorStop(1, 'rgba(0,0,0,0.35)');
+    ctx.fillStyle = bevel;
+    ctx.fill();
+
+    const innerShadow = ctx.createRadialGradient(
+      px + size / 2,
+      py + size / 2,
+      size * 0.12,
+      px + size / 2,
+      py + size / 2,
+      size * 0.7
+    );
+    innerShadow.addColorStop(0, 'rgba(0,0,0,0)');
+    innerShadow.addColorStop(1, `rgba(0,0,0,${0.55 * (1 - lighting)})`);
+    ctx.fillStyle = innerShadow;
+    ctx.fill();
+
+    if (displayType === 'room') {
+      ctx.fillStyle = `rgba(255,255,255,${0.12 * lighting})`;
+      for (let i = 0; i < 6; i++) {
+        const ox = pseudoRandom(x + i * 3, y + i * 7, 2);
+        const oy = pseudoRandom(x + i * 5, y + i * 11, 3);
+        ctx.beginPath();
+        ctx.arc(px + size * (0.15 + ox * 0.7), py + size * (0.2 + oy * 0.6), size * (0.01 + ox * 0.015), 0, Math.PI * 2);
+        ctx.fill();
       }
-      const pattern = patternsRef.current[patternKey];
-      if (pattern) {
-        ctx.globalAlpha = 0.2 + 0.2 * lighting;
-        ctx.fillStyle = pattern;
-        ctx.fillRect(px, py, size, size);
-        ctx.globalAlpha = 1;
+    } else if (displayType === 'corridor') {
+      ctx.save();
+      ctx.translate(px + size / 2, py + size / 2);
+      const angle = pseudoRandom(x, y) > 0.5 ? Math.PI / 4 : -Math.PI / 4;
+      ctx.rotate(angle);
+      ctx.strokeStyle = `rgba(124,58,237,${0.28 * lighting})`;
+      ctx.lineWidth = 1.4;
+      for (let i = -size; i < size; i += 6) {
+        ctx.beginPath();
+        ctx.moveTo(i, -size);
+        ctx.lineTo(i, size);
+        ctx.stroke();
       }
+      ctx.restore();
     }
 
-    ctx.strokeStyle = 'rgba(255,255,255,0.08)';
-    ctx.lineWidth = 2;
-    ctx.strokeRect(px + 1, py + 1, size - 2, size - 2);
-
-    const rim = ctx.createLinearGradient(px, py, px + size, py + size);
-    rim.addColorStop(0, 'rgba(255,255,255,0.08)');
-    rim.addColorStop(1, 'rgba(0,0,0,0.35)');
-    ctx.strokeStyle = rim;
-    ctx.lineWidth = 3;
-    ctx.strokeRect(px + 1.5, py + 1.5, size - 3, size - 3);
-
-    if (tile.type === 'secretDoor' && tile.revealed) {
-      ctx.strokeStyle = '#7dd3fc';
-      ctx.setLineDash([6, 6]);
-      ctx.lineWidth = 2.5;
-      ctx.strokeRect(px + 8, py + 8, size - 16, size - 16);
-      ctx.setLineDash([]);
-    }
-
-    if (tile.type === 'door') {
-      ctx.strokeStyle = '#cbd5e1';
-      ctx.lineWidth = 5;
-      ctx.beginPath();
-      ctx.moveTo(px + size * 0.2, py + size * 0.5);
-      ctx.lineTo(px + size * 0.8, py + size * 0.5);
-      ctx.stroke();
-    }
+    ctx.strokeStyle = 'rgba(255,255,255,0.12)';
+    ctx.lineWidth = displayType === 'room' ? 3 : 2;
+    roundedRectPath(ctx, px + 1.5, py + 1.5, size - 3, size - 3, radius);
+    ctx.stroke();
 
     if (tile.type === 'trap' && tile.revealed) {
       ctx.strokeStyle = '#fb923c';
-      ctx.lineWidth = 2.5;
+      ctx.lineWidth = 2.8;
       ctx.beginPath();
-      ctx.moveTo(px + size * 0.2, py + size * 0.8);
-      ctx.lineTo(px + size * 0.5, py + size * 0.2);
-      ctx.lineTo(px + size * 0.8, py + size * 0.8);
+      ctx.moveTo(px + size * 0.22, py + size * 0.78);
+      ctx.lineTo(px + size * 0.5, py + size * 0.18);
+      ctx.lineTo(px + size * 0.78, py + size * 0.78);
       ctx.closePath();
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(px + size * 0.28, py + size * 0.66);
+      ctx.lineTo(px + size * 0.5, py + size * 0.35);
+      ctx.lineTo(px + size * 0.72, py + size * 0.66);
       ctx.stroke();
     }
 
@@ -282,34 +261,13 @@ const DungeonCanvas = forwardRef<DungeonCanvasHandle, DungeonCanvasProps>(({ til
         py + size / 2,
         size * 0.46
       );
-      ring.addColorStop(0, tile.type === 'start' ? 'rgba(34,197,94,0.45)' : 'rgba(239,68,68,0.6)');
+      ring.addColorStop(0, tile.type === 'start' ? 'rgba(34,197,94,0.5)' : 'rgba(239,68,68,0.6)');
       ring.addColorStop(1, 'rgba(0,0,0,0)');
       ctx.fillStyle = ring;
       ctx.fillRect(px, py, size, size);
     }
 
-    if (!isVisible) {
-      ctx.fillStyle = `rgba(4,6,15,${clamp(1 - lighting, 0.45, 0.82)})`;
-      ctx.fillRect(px, py, size, size);
-    } else {
-      const glow = ctx.createRadialGradient(
-        px + size / 2,
-        py + size / 2,
-        size * 0.05,
-        px + size / 2,
-        py + size / 2,
-        size * 0.7
-      );
-      glow.addColorStop(0, 'rgba(255,255,255,0.08)');
-      glow.addColorStop(1, 'rgba(0,0,0,0)');
-      ctx.fillStyle = glow;
-      ctx.fillRect(px, py, size, size);
-    }
-
-    if (!isExplored) {
-      ctx.fillStyle = 'rgba(5,7,12,0.8)';
-      ctx.fillRect(px, py, size, size);
-    }
+    ctx.restore();
   };
 
   const roundedRectPath = (
@@ -334,6 +292,150 @@ const DungeonCanvas = forwardRef<DungeonCanvasHandle, DungeonCanvasProps>(({ til
     ctx.closePath();
   };
 
+  /**
+   * Render an extruded wall tile composed of side faces (south/east), a top cap, and subtle edge highlights.
+   * Drawing order matters: faces first so the beveled top can cover seams, then outlines.
+   */
+  const drawWallExtrusion = (
+    ctx: CanvasRenderingContext2D,
+    tile: Tile,
+    x: number,
+    y: number,
+    size: number
+  ) => {
+    const px = x * size;
+    const py = y * size;
+    const radius = 8;
+    const lighting = getLighting(tile);
+    const wallTop = palette.wall;
+    const side = palette.wallSide;
+    const deep = palette.wallDeep;
+    const h = RenderSettings.wallHeightPx;
+    const faceInset = 3;
+
+    // South face (falls off the bottom edge)
+    ctx.save();
+    ctx.fillStyle = `${side}f0`;
+    ctx.beginPath();
+    ctx.moveTo(px + faceInset, py + size - faceInset);
+    ctx.lineTo(px + size - faceInset, py + size - faceInset);
+    ctx.lineTo(px + size - faceInset, py + size - faceInset + h);
+    ctx.lineTo(px + faceInset, py + size - faceInset + h);
+    ctx.closePath();
+    ctx.fill();
+
+    const southShade = ctx.createLinearGradient(px, py + size - faceInset, px, py + size + h);
+    southShade.addColorStop(0, 'rgba(0,0,0,0)');
+    southShade.addColorStop(1, 'rgba(0,0,0,0.35)');
+    ctx.fillStyle = southShade;
+    ctx.fill();
+
+    // East face (extrudes to the right)
+    ctx.fillStyle = `${deep}f0`;
+    ctx.beginPath();
+    ctx.moveTo(px + size - faceInset, py + faceInset);
+    ctx.lineTo(px + size - faceInset + h, py + faceInset + h * 0.1);
+    ctx.lineTo(px + size - faceInset + h, py + size - faceInset + h * 0.1);
+    ctx.lineTo(px + size - faceInset, py + size - faceInset);
+    ctx.closePath();
+    ctx.fill();
+
+    const eastShade = ctx.createLinearGradient(px + size - faceInset, py, px + size + h, py);
+    eastShade.addColorStop(0, 'rgba(0,0,0,0)');
+    eastShade.addColorStop(1, 'rgba(0,0,0,0.5)');
+    ctx.fillStyle = eastShade;
+    ctx.fill();
+
+    // Top face
+    const baseColor = wallTop;
+    roundedRectPath(ctx, px + 2, py + 2, size - 4, size - 4, radius);
+    const fillGradient = ctx.createLinearGradient(px, py, px + size, py + size);
+    fillGradient.addColorStop(0, `${baseColor}`);
+    fillGradient.addColorStop(1, `${baseColor}dd`);
+    ctx.fillStyle = fillGradient;
+    ctx.fill();
+
+    const bevel = ctx.createLinearGradient(px, py, px + size, py + size);
+    bevel.addColorStop(0, `rgba(255,255,255,${0.08 * lighting})`);
+    bevel.addColorStop(1, 'rgba(0,0,0,0.35)');
+    ctx.fillStyle = bevel;
+    ctx.fill();
+
+    // Edge highlights and shade lines on top face
+    ctx.strokeStyle = 'rgba(255,255,255,0.18)';
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.moveTo(px + 4, py + 3);
+    ctx.lineTo(px + size - 4, py + 3);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(px + 3, py + 4);
+    ctx.lineTo(px + 3, py + size - 4);
+    ctx.stroke();
+
+    ctx.strokeStyle = 'rgba(0,0,0,0.4)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(px + size - 3, py + 4);
+    ctx.lineTo(px + size - 3, py + size - 3);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(px + 4, py + size - 3);
+    ctx.lineTo(px + size - 3, py + size - 3);
+    ctx.stroke();
+
+    ctx.restore();
+  };
+
+  const drawDoorFace = (
+    ctx: CanvasRenderingContext2D,
+    tile: Tile,
+    x: number,
+    y: number,
+    size: number
+  ) => {
+    const px = x * size;
+    const py = y * size;
+    const panelW = size * 0.62;
+    const panelH = size * 0.58;
+    const lighting = getLighting(tile);
+
+    ctx.save();
+    ctx.fillStyle = palette.door;
+    ctx.strokeStyle = '#2b1f12';
+    ctx.lineWidth = 2.5;
+    roundedRectPath(ctx, px + size * 0.19, py + size * 0.2, panelW, panelH, 7);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.beginPath();
+    ctx.arc(px + size * 0.68, py + size * 0.5, size * 0.05, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.strokeStyle = `rgba(255,255,255,${0.25 * lighting})`;
+    ctx.beginPath();
+    ctx.moveTo(px + size * 0.26, py + size * 0.32);
+    ctx.lineTo(px + size * 0.74, py + size * 0.32);
+    ctx.stroke();
+
+    if (tile.type === 'secretDoor' && tile.revealed) {
+      ctx.strokeStyle = '#7dd3fc';
+      ctx.setLineDash([5, 4]);
+      ctx.lineWidth = 2.2;
+      roundedRectPath(ctx, px + 6, py + 6, size - 12, size - 12, 6);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.strokeStyle = '#67e8f9';
+      ctx.beginPath();
+      ctx.moveTo(px + size * 0.5, py + size * 0.24);
+      ctx.lineTo(px + size * 0.5, py + size * 0.4);
+      ctx.stroke();
+    }
+
+    ctx.restore();
+  };
+
   const drawShadow = (ctx: CanvasRenderingContext2D, cx: number, cy: number, size: number) => {
     ctx.save();
     ctx.fillStyle = 'rgba(0,0,0,0.35)';
@@ -341,6 +443,82 @@ const DungeonCanvas = forwardRef<DungeonCanvasHandle, DungeonCanvasProps>(({ til
     ctx.ellipse(cx, cy + size * 0.18, size * 0.22, size * 0.09, 0, 0, Math.PI * 2);
     ctx.fill();
     ctx.restore();
+  };
+
+  const drawWallShadow = (
+    ctx: CanvasRenderingContext2D,
+    tiles: Tile[][],
+    wallTile: Tile,
+    x: number,
+    y: number,
+    size: number
+  ) => {
+    if (!wallTile.visible && !wallTile.explored) return;
+    const reach = RenderSettings.shadowReachTiles;
+    const offsets = [
+      { dx: 1, dy: 0, alpha: 0.5 },
+      { dx: 1, dy: 1, alpha: 0.8 },
+      { dx: 2, dy: 1, alpha: 0.4 }
+    ];
+    const shadowOffset = RenderSettings.wallHeightPx * 0.8;
+
+    offsets.forEach(({ dx, dy, alpha }) => {
+      if (dx > reach || dy > reach) return;
+      const tx = x + dx;
+      const ty = y + dy;
+      const target = tiles[ty]?.[tx];
+      if (!target) return;
+      if (!target.visible && !target.explored) return;
+      const displayType = getDisplayType(target);
+      if (!isPassableDisplayType(displayType)) return;
+
+      const px = tx * size;
+      const py = ty * size;
+      ctx.save();
+      ctx.fillStyle = `rgba(0,0,0,${RenderSettings.shadowStrength * alpha})`;
+      ctx.shadowColor = `rgba(0,0,0,${RenderSettings.shadowStrength * alpha})`;
+      ctx.shadowBlur = RenderSettings.shadowBlur;
+      roundedRectPath(ctx, px + 4, py + 4 + shadowOffset, size - 8, size - 8, 8);
+      ctx.fill();
+      ctx.restore();
+    });
+  };
+
+  const applyVisibilityMask = (ctx: CanvasRenderingContext2D, tiles: Tile[][], size: number) => {
+    const height = tiles.length;
+    const width = tiles[0]?.length ?? 0;
+
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const tile = tiles[y][x];
+        const px = x * size;
+        const py = y * size;
+        const lighting = getLighting(tile);
+
+        if (!tile.visible) {
+          ctx.fillStyle = `rgba(4,6,15,${clamp(1 - lighting, 0.45, 0.85)})`;
+          ctx.fillRect(px, py, size, size);
+        } else {
+          const glow = ctx.createRadialGradient(
+            px + size / 2,
+            py + size / 2,
+            size * 0.08,
+            px + size / 2,
+            py + size / 2,
+            size * 0.7
+          );
+          glow.addColorStop(0, 'rgba(255,255,255,0.1)');
+          glow.addColorStop(1, 'rgba(0,0,0,0)');
+          ctx.fillStyle = glow;
+          ctx.fillRect(px, py, size, size);
+        }
+
+        if (!tile.explored) {
+          ctx.fillStyle = 'rgba(5,7,12,0.8)';
+          ctx.fillRect(px, py, size, size);
+        }
+      }
+    }
   };
 
   const drawPlayerToken = (ctx: CanvasRenderingContext2D, position: { x: number; y: number }, size: number) => {
@@ -392,6 +570,12 @@ const DungeonCanvas = forwardRef<DungeonCanvasHandle, DungeonCanvasProps>(({ til
     ctx.beginPath();
     ctx.moveTo(cx + size * 0.15, cy - size * 0.02);
     ctx.lineTo(cx + size * 0.26, cy - size * 0.18);
+    ctx.stroke();
+
+    ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(cx, cy, size * 0.28, 0, Math.PI * 2);
     ctx.stroke();
 
     ctx.restore();
@@ -466,6 +650,12 @@ const DungeonCanvas = forwardRef<DungeonCanvasHandle, DungeonCanvasProps>(({ til
       ctx.stroke();
     }
 
+    ctx.strokeStyle = 'rgba(255,255,255,0.18)';
+    ctx.lineWidth = 2.4;
+    ctx.beginPath();
+    ctx.arc(cx, cy, size * 0.3 * scale, 0, Math.PI * 2);
+    ctx.stroke();
+
     ctx.restore();
   };
 
@@ -516,13 +706,39 @@ const DungeonCanvas = forwardRef<DungeonCanvasHandle, DungeonCanvasProps>(({ til
         ctx.translate(offsetX, offsetY);
       }
 
+      // Floor pass: rooms/corridors/treasure/traps as flat tiles.
       for (let y = 0; y < height; y++) {
         for (let x = 0; x < width; x++) {
-          const tile = currentTiles[y][x];
-          drawTile(ctx, tile, x, y, size);
+          drawFloorTile(ctx, currentTiles[y][x], x, y, size);
         }
       }
 
+      // Wall shadows: cast down-right before we draw walls so fog/light darkens shadows too.
+      for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+          const tile = currentTiles[y][x];
+          const displayType = getDisplayType(tile);
+          if (displayType === 'wall' || tile.type === 'door' || tile.type === 'secretDoor') {
+            drawWallShadow(ctx, currentTiles, tile, x, y, size);
+          }
+        }
+      }
+
+      // Extruded walls and doors (drawn after shadows for crisp edges).
+      for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+          const tile = currentTiles[y][x];
+          const displayType = getDisplayType(tile);
+          if (displayType === 'wall' || tile.type === 'door' || tile.type === 'secretDoor') {
+            drawWallExtrusion(ctx, tile, x, y, size);
+            if (tile.type === 'door' || (tile.type === 'secretDoor' && tile.revealed)) {
+              drawDoorFace(ctx, tile, x, y, size);
+            }
+          }
+        }
+      }
+
+      // Tokens
       for (let y = 0; y < height; y++) {
         for (let x = 0; x < width; x++) {
           const tile = currentTiles[y][x];
@@ -579,6 +795,22 @@ const DungeonCanvas = forwardRef<DungeonCanvasHandle, DungeonCanvasProps>(({ til
           ctx.fillRect(0, 0, canvasWidth, canvasHeight);
         }
       }
+
+      // Fog of war and light mask applied after geometry and effects so shadows inherit darkness.
+      applyVisibilityMask(ctx, currentTiles, size);
+
+      const vignette = ctx.createRadialGradient(
+        canvasWidth / 2,
+        canvasHeight / 2,
+        Math.max(canvasWidth, canvasHeight) * 0.2,
+        canvasWidth / 2,
+        canvasHeight / 2,
+        Math.max(canvasWidth, canvasHeight) * 0.8
+      );
+      vignette.addColorStop(0, 'rgba(0,0,0,0)');
+      vignette.addColorStop(1, 'rgba(0,0,0,0.38)');
+      ctx.fillStyle = vignette;
+      ctx.fillRect(0, 0, canvasWidth, canvasHeight);
 
       ctx.restore();
 
