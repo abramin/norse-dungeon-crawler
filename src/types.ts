@@ -1,62 +1,66 @@
-export type ItemEffect = 'heal' | 'attack' | 'defense' | 'maxHealth';
+export type TileType =
+  | 'wall'
+  | 'room'
+  | 'corridor'
+  | 'door'
+  | 'secretDoor'
+  | 'trap'
+  | 'treasure'
+  | 'start'
+  | 'boss';
 
-export interface Item {
-  name: string;
-  effect: ItemEffect;
-  value: number;
-  icon: string;
-}
-
-export interface Enemy {
-  name: string;
-  health: number;
-  attack: number;
-  defense: number;
-  gold: number;
-}
-
-export type TileType = 'start' | 'boss' | 'enemy' | 'treasure' | 'item' | 'puzzle' | 'empty';
-
-export interface DungeonTile {
+export interface Tile {
   type: TileType;
-  enemy?: Enemy;
-  item?: Item;
-  riddle?: Riddle;
+  explored: boolean;
+  visible: boolean;
+  revealed?: boolean;
+  monsterId?: string | null;
+  lootId?: string | null;
+}
+
+export type Tier = 'minion' | 'elite' | 'boss';
+
+export interface MonsterArchetype {
+  id: string;
+  name: string;
+  glyph: string;
+  maxHP: number;
+  atk: number;
+  def: number;
+  gold: number;
+  tier?: Tier;
+}
+
+export interface MonsterInstance {
+  id: string;
+  archetypeId: string;
+  hp: number;
+  pos: { x: number; y: number };
+}
+
+export interface CombatState {
+  active: boolean;
+  monsterId: string | null;
+  lastHitAt?: number;
 }
 
 export interface PlayerState {
   x: number;
   y: number;
-  health: number;
-  maxHealth: number;
-  attack: number;
-  defense: number;
+  hp: number;
+  maxHP: number;
+  atk: number;
+  def: number;
   gold: number;
-  inventory: Item[];
 }
 
-export interface CombatState extends Enemy {
-  maxHealth: number;
-}
-
-export interface PuzzleState {
-  question: string;
-  answer: string;
-  reward: string;
-}
-
-export type NotificationType =
-  | 'info'
-  | 'combat'
-  | 'boss'
-  | 'treasure'
-  | 'item'
-  | 'puzzle'
-  | 'victory'
-  | 'defeat'
-  | 'success';
-
-export interface NotificationState {
-  message: string;
-  type: NotificationType;
+export interface GameState {
+  gridSize: number;
+  tiles: Tile[][];
+  player: PlayerState;
+  monstersById: Record<string, MonsterInstance>;
+  archetypesById: Record<string, MonsterArchetype>;
+  combat: CombatState;
+  log: string[];
+  inventory: string[];
 }
