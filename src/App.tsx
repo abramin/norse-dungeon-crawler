@@ -3,8 +3,8 @@ import { Sword, Shield, Heart, Gift, Map, Sparkles } from 'lucide-react';
 import DungeonCanvas, { DungeonCanvasHandle } from './DungeonCanvas';
 import { CombatState, DungeonTile, Item, NotificationState, PlayerState, PuzzleState } from './types';
 
-const GRID_SIZE = 8;
-const TILE_SIZE = 56;
+const GRID_SIZE = 10;
+const TILE_SIZE = 64;
 const VISION_RADIUS = 3;
 const BIG_HIT_DAMAGE = 8;
 
@@ -339,7 +339,7 @@ const NorseDungeonCrawler: React.FC = () => {
 
   return (
     <div className="w-full min-h-screen bg-gradient-to-br from-slate-900 via-blue-900 to-slate-900 p-4 flex flex-col items-center overflow-auto">
-      <div className="max-w-6xl w-full bg-slate-800 rounded-lg shadow-2xl border-4 border-blue-700 p-6 my-4">
+      <div className="max-w-[1600px] w-full bg-slate-800 rounded-lg shadow-2xl border-4 border-blue-700 p-6 my-4">
         <h1 className="text-4xl font-bold text-center mb-4 text-blue-200 drop-shadow-lg">⚔️ Norse Dungeon Crawler ⚔️</h1>
 
         {/* Notification Popup */}

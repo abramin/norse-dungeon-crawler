@@ -56,8 +56,7 @@ const palette: Record<string, string> = {
 };
 
 const DungeonCanvas = forwardRef<DungeonCanvasHandle, DungeonCanvasProps>(
-  ({ dungeon, explored, player, combat, tileSize = 48, visionRadius }, ref)
-) => {
+  ({ dungeon, explored, player, combat, tileSize = 48, visionRadius }, ref) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const animationRef = useRef<number>();
   const propsRef = useRef({ dungeon, explored, player, combat });
@@ -124,8 +123,6 @@ const DungeonCanvas = forwardRef<DungeonCanvasHandle, DungeonCanvasProps>(
     const { width, height } = dimsRef.current;
     canvas.width = width * dpr;
     canvas.height = height * dpr;
-    canvas.style.width = `${width}px`;
-    canvas.style.height = `${height}px`;
     // Scale drawing to handle high-DPI displays for crisp pixels.
     ctx.scale(dpr, dpr);
 
@@ -294,23 +291,8 @@ const DungeonCanvas = forwardRef<DungeonCanvasHandle, DungeonCanvasProps>(
     ctx.fillText('ᚠ', playerCenter.x, playerCenter.y + 1);
   };
 
-  const applyLighting = (ctx: CanvasRenderingContext2D) => {
-    const { width, height } = dimsRef.current;
-    const centerX = (renderedPlayerRef.current.x + 0.5) * tileSize;
-    const centerY = (renderedPlayerRef.current.y + 0.5) * tileSize;
-    const radius = tileSize * (visionRadius + 0.5);
-
-    // Draw a dark overlay then remove a radial gradient around the player for soft lighting.
-    ctx.save();
-    ctx.fillStyle = 'rgba(0,0,0,0.6)';
-    ctx.fillRect(0, 0, width, height);
-    const gradient = ctx.createRadialGradient(centerX, centerY, tileSize * 0.6, centerX, centerY, radius);
-    gradient.addColorStop(0, 'rgba(0,0,0,0)');
-    gradient.addColorStop(1, 'rgba(0,0,0,1)');
-    ctx.globalCompositeOperation = 'destination-out';
-    ctx.fillStyle = gradient;
-    ctx.fillRect(centerX - radius, centerY - radius, radius * 2, radius * 2);
-    ctx.restore();
+  const applyLighting = (_ctx: CanvasRenderingContext2D) => {
+    // Lighting disabled for better visibility
   };
 
   const drawParticles = (ctx: CanvasRenderingContext2D, delta: number) => {
@@ -347,7 +329,7 @@ const DungeonCanvas = forwardRef<DungeonCanvasHandle, DungeonCanvasProps>(
     flashesRef.current = next;
   };
 
-  return <canvas ref={canvasRef} className="w-full rounded-lg border-2 border-slate-800 bg-slate-950" />;
+  return <canvas ref={canvasRef} className="w-full h-auto rounded-lg border-2 border-slate-800 bg-slate-950" />;
 });
 
 DungeonCanvas.displayName = 'DungeonCanvas';
