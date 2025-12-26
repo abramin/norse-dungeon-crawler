@@ -1,13 +1,15 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Gift, Heart, Map, Shield, Sparkles, Sword, Search } from 'lucide-react';
-import DungeonCanvas, { DungeonCanvasHandle } from './DungeonCanvas';
-import { CombatState, GameState, MonsterArchetype, MonsterInstance, Tile } from './types';
+import { Gift, Heart, Shield, Sparkles, Sword, Search, RotateCcw, RotateCw, ArrowUp, ArrowDown, ArrowLeft, ArrowRight } from 'lucide-react';
+import FirstPersonCanvas, { FirstPersonCanvasHandle } from './FirstPersonCanvas';
+import Minimap from './Minimap';
+import CompassHUD from './CompassHUD';
+import { CombatState, FacingDirection, GameState, MonsterArchetype, MonsterInstance, Tile } from './types';
 import { generateDungeon, labelRegions } from './dungeonGen';
 import { computeVisibility } from './visibility';
+import { getForwardDelta, getStrafeDelta, turnLeft, turnRight } from './RaycastEngine';
 
 const GRID_SIZE = 16;
-const TILE_SIZE = 44;
-const VISION_RADIUS = 4;
+const VISION_RADIUS = 5;
 const MAX_LOG = 30;
 const SEARCH_DISTANCE = 10;
 const SEARCH_CHANCE = 0.85;
@@ -31,7 +33,7 @@ const toRecord = <T extends { id: string }>(list: T[]) =>
 const roll = (min: number, max: number) => Math.floor(Math.random() * (max - min + 1)) + min;
 
 const NorseDungeonCrawler: React.FC = () => {
-  const canvasRef = useRef<DungeonCanvasHandle | null>(null);
+  const canvasRef = useRef<FirstPersonCanvasHandle | null>(null);
   const [game, setGame] = useState<GameState | null>(null);
   const logContainerRef = useRef<HTMLDivElement | null>(null);
   const logEndRef = useRef<HTMLDivElement | null>(null);
@@ -52,10 +54,42 @@ const NorseDungeonCrawler: React.FC = () => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement;
       if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return;
-      if (e.key === 'ArrowUp' || e.key === 'w' || e.key === 'W') tryMove(0, -1);
-      if (e.key === 'ArrowDown' || e.key === 's' || e.key === 'S') tryMove(0, 1);
-      if (e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A') tryMove(-1, 0);
-      if (e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D') tryMove(1, 0);
+
+      // First-person controls
+      if (e.key === 'w' || e.key === 'W' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        moveForward();
+      }
+      if (e.key === 's' || e.key === 'S' || e.key === 'ArrowDown') {
+        e.preventDefault();
+        moveBackward();
+      }
+      if (e.key === 'a' || e.key === 'A') {
+        e.preventDefault();
+        strafeLeft();
+      }
+      if (e.key === 'd' || e.key === 'D') {
+        e.preventDefault();
+        strafeRight();
+      }
+      if (e.key === 'q' || e.key === 'Q' || e.key === 'ArrowLeft') {
+        e.preventDefault();
+        handleTurnLeft();
+      }
+      if (e.key === 'e' || e.key === 'E' || e.key === 'ArrowRight') {
+        e.preventDefault();
+        handleTurnRight();
+      }
+      if (e.key === ' ' || e.key === 'Enter') {
+        e.preventDefault();
+        if (game?.combat.active) {
+          resolvePlayerAttack();
+        }
+      }
+      if (e.key === 'f' || e.key === 'F') {
+        e.preventDefault();
+        searchAround();
+      }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
@@ -78,11 +112,11 @@ const NorseDungeonCrawler: React.FC = () => {
     const initialState: GameState = {
       gridSize: GRID_SIZE,
       tiles: visibility,
-      player: { x: start.x, y: start.y, hp: 40, maxHP: 40, atk: 6, def: 4, gold: 0 },
+      player: { x: start.x, y: start.y, facing: 'south', hp: 40, maxHP: 40, atk: 6, def: 4, gold: 0 },
       monstersById,
       archetypesById: toRecord(archetypes),
       combat: { active: false, monsterId: null },
-      log: ['You enter the frozen halls beneath Yggdrasil...'],
+      log: ['You enter the frozen halls beneath Yggdrasil...', 'Use W/S to move, Q/E to turn, SPACE to attack.'],
       inventory: []
     };
 
@@ -143,7 +177,6 @@ const NorseDungeonCrawler: React.FC = () => {
     return updated;
   };
 
-  // Secret doors are only carved along boundaries between distinct passable regions.
   const placeSecretDoors = (tiles: Tile[][]) => {
     const candidates: { x: number; y: number; regions: [number, number] }[] = [];
     const dirs = [
@@ -231,6 +264,7 @@ const NorseDungeonCrawler: React.FC = () => {
     return { tiles: updatedTiles, monstersById };
   };
 
+  // Movement functions for first-person view
   const tryMove = (dx: number, dy: number) => {
     setGame((prev) => {
       if (!prev || prev.combat.active || prev.player.hp <= 0) return prev;
@@ -262,11 +296,12 @@ const NorseDungeonCrawler: React.FC = () => {
         nextState.player = { ...nextState.player, hp: Math.max(0, nextState.player.hp - damage) };
         nextTiles = updateTiles(nextTiles, newX, newY, (tile) => ({ ...tile, revealed: true, triggered: true }));
         canvasRef.current?.hitFlash('player');
+        canvasRef.current?.screenShake?.(200, 10);
       }
 
       if (target.type === 'treasure') {
         const gold = roll(10, 25);
-        appendLog(`You find ${gold} gold.`);
+        appendLog(`You find ${gold} gold in a chest!`);
         nextState.player = { ...nextState.player, gold: nextState.player.gold + gold };
         nextTiles = updateTiles(nextTiles, newX, newY, (tile) => ({ ...tile, type: 'corridor', lootId: null }));
         canvasRef.current?.spawnParticles(newX, newY, 'treasure');
@@ -275,7 +310,7 @@ const NorseDungeonCrawler: React.FC = () => {
       if (target.monsterId) {
         const monster = prev.monstersById[target.monsterId];
         if (monster) {
-          appendLog(`A ${prev.archetypesById[monster.archetypeId].name} engages you!`);
+          appendLog(`A ${prev.archetypesById[monster.archetypeId].name} blocks your path!`);
           nextState.combat = { active: true, monsterId: monster.id } as CombatState;
         }
       }
@@ -289,6 +324,62 @@ const NorseDungeonCrawler: React.FC = () => {
       }
 
       return nextState;
+    });
+  };
+
+  const moveForward = () => {
+    setGame((prev) => {
+      if (!prev) return prev;
+      const delta = getForwardDelta(prev.player.facing);
+      return prev; // Return prev, then call tryMove
+    });
+    // Get current facing and move
+    if (game) {
+      const delta = getForwardDelta(game.player.facing);
+      tryMove(delta.dx, delta.dy);
+    }
+  };
+
+  const moveBackward = () => {
+    if (game) {
+      const delta = getForwardDelta(game.player.facing);
+      tryMove(-delta.dx, -delta.dy);
+    }
+  };
+
+  const strafeLeft = () => {
+    if (game) {
+      const delta = getStrafeDelta(game.player.facing, 'left');
+      tryMove(delta.dx, delta.dy);
+    }
+  };
+
+  const strafeRight = () => {
+    if (game) {
+      const delta = getStrafeDelta(game.player.facing, 'right');
+      tryMove(delta.dx, delta.dy);
+    }
+  };
+
+  const handleTurnLeft = () => {
+    setGame((prev) => {
+      if (!prev || prev.player.hp <= 0) return prev;
+      const newFacing = turnLeft(prev.player.facing);
+      return {
+        ...prev,
+        player: { ...prev.player, facing: newFacing }
+      };
+    });
+  };
+
+  const handleTurnRight = () => {
+    setGame((prev) => {
+      if (!prev || prev.player.hp <= 0) return prev;
+      const newFacing = turnRight(prev.player.facing);
+      return {
+        ...prev,
+        player: { ...prev.player, facing: newFacing }
+      };
     });
   };
 
@@ -316,11 +407,10 @@ const NorseDungeonCrawler: React.FC = () => {
 
       const needsRelabel = found.some((f) => f === 'secret door');
       const nextTiles = needsRelabel ? labelRegions(tiles) : tiles;
-      const chance = Math.round(SEARCH_CHANCE * 100);
       const message =
         found.length === 0
-          ? `You search carefully (${chance}% focus) but find nothing in this area.`
-          : `You discover ${found.join(' and ')} nearby!`;
+          ? 'You search carefully but find nothing nearby.'
+          : `You discover ${found.join(' and ')}!`;
 
       return { ...prev, tiles: nextTiles, log: [...prev.log, message].slice(-MAX_LOG) };
     });
@@ -336,7 +426,7 @@ const NorseDungeonCrawler: React.FC = () => {
       const rollValue = roll(1, 6);
       const damage = Math.max(1, prev.player.atk + rollValue - archetype.def);
       const newHP = monster.hp - damage;
-      appendLog(`You strike the ${archetype.name} for ${damage} damage.`);
+      appendLog(`You strike the ${archetype.name} for ${damage} damage!`);
       canvasRef.current?.hitFlash('monster');
       let tiles = prev.tiles;
       let monsters = { ...prev.monstersById };
@@ -369,10 +459,10 @@ const NorseDungeonCrawler: React.FC = () => {
     const damage = Math.max(1, archetype.atk + rollValue - state.player.def);
     const hp = state.player.hp - damage;
     const nextPlayer = { ...state.player, hp };
-    appendLog(`The ${archetype.name} strikes you for ${damage} damage.`);
+    appendLog(`The ${archetype.name} strikes back for ${damage} damage!`);
     canvasRef.current?.hitFlash('player');
     if (damage >= 8) {
-      canvasRef.current?.screenShake?.(240, 6);
+      canvasRef.current?.screenShake?.(240, 8);
     }
     if (hp <= 0) {
       appendLog('You fall to the dungeon floor...');
@@ -388,181 +478,258 @@ const NorseDungeonCrawler: React.FC = () => {
 
   const { player, tiles, combat, log, inventory } = game;
 
-  const legendItems: { label: string; style: React.CSSProperties; marker?: 'door' | 'secret' | 'trap' }[] = [
-    {
-      label: 'Wall',
-      style: {
-        backgroundColor: '#070910',
-        border: '2px solid #111827',
-        boxShadow: 'inset 0 0 0 2px rgba(255,255,255,0.08)'
-      }
-    },
-    {
-      label: 'Room',
-      style: {
-        backgroundColor: '#2f3f5b',
-        border: '1px solid rgba(255,255,255,0.15)',
-        backgroundImage:
-          'radial-gradient(circle at 20% 30%, rgba(255,255,255,0.15) 0%, rgba(255,255,255,0.15) 6%, transparent 8%), radial-gradient(circle at 70% 70%, rgba(255,255,255,0.1) 0%, rgba(255,255,255,0.1) 5%, transparent 7%)'
-      }
-    },
-    {
-      label: 'Corridor',
-      style: {
-        backgroundColor: '#1b2434',
-        border: '1px solid rgba(255,255,255,0.12)',
-        backgroundImage:
-          'repeating-linear-gradient(45deg, rgba(124,58,237,0.4), rgba(124,58,237,0.4) 6px, transparent 6px, transparent 12px)'
-      }
-    },
-    { label: 'Door', style: { backgroundColor: '#c0a16d', border: '2px solid #2b1f12' }, marker: 'door' },
-    {
-      label: 'Secret door',
-      style: { backgroundColor: '#070910', border: '2px dashed #7dd3fc' },
-      marker: 'secret'
-    },
-    {
-      label: 'Trap (revealed)',
-      style: { backgroundColor: '#1b2434', border: '2px solid rgba(251,146,60,0.8)' },
-      marker: 'trap'
-    }
-  ];
-
   return (
-    <div className="w-full min-h-screen bg-gradient-to-br from-slate-900 via-blue-900 to-slate-900 p-4 flex flex-col items-center overflow-auto">
-      <div className="max-w-[1600px] w-full bg-slate-800 rounded-lg shadow-2xl border-4 border-blue-700 p-6 my-4">
-        <h1 className="text-4xl font-bold text-center mb-4 text-blue-200 drop-shadow-lg">⚔️ Norse Dungeon Crawler ⚔️</h1>
+    <div className="w-full min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 p-2 md:p-4 flex flex-col items-center overflow-auto">
+      <div className="max-w-[1200px] w-full bg-slate-800 rounded-lg shadow-2xl border-2 border-slate-600 p-3 md:p-4 my-2">
+        <h1 className="text-2xl md:text-3xl font-bold text-center mb-3 text-slate-200 drop-shadow-lg">
+          Norse Dungeon Crawler
+        </h1>
 
-        <div className="grid grid-cols-1 lg:grid-cols-[220px_1fr_280px] gap-4">
+        <div className="grid grid-cols-1 lg:grid-cols-[1fr_280px] gap-3">
+          {/* Main View Area */}
           <div className="space-y-3">
-            <div className="bg-slate-700 rounded-lg p-4 border-2 border-blue-600">
-              <h2 className="text-xl font-bold text-blue-300 mb-3 flex items-center gap-2">
-                <Heart className="w-5 h-5" /> Hero Stats
-              </h2>
-              <div className="grid grid-cols-2 gap-2 text-blue-100">
-                <div className="flex items-center gap-2">
-                  <Heart className="w-4 h-4 text-red-400" /> HP: {player.hp}/{player.maxHP}
-                </div>
-                <div className="flex items-center gap-2">
-                  <Sword className="w-4 h-4 text-orange-400" /> ATK: {player.atk}
-                </div>
-                <div className="flex items-center gap-2">
-                  <Shield className="w-4 h-4 text-cyan-400" /> DEF: {player.def}
-                </div>
-                <div className="flex items-center gap-2">
-                  <Sparkles className="w-4 h-4 text-yellow-300" /> Gold: {player.gold}
-                </div>
-              </div>
-            </div>
+            {/* First Person View with HUD overlays */}
+            <div className="relative bg-black rounded-lg overflow-hidden">
+              <FirstPersonCanvas
+                ref={canvasRef}
+                tiles={tiles}
+                player={player}
+                combat={combat}
+                width={640}
+                height={400}
+              />
 
-            <div className="bg-slate-700 rounded-lg p-4 border-2 border-blue-600">
-              <h2 className="text-xl font-bold text-blue-300 mb-3 flex items-center gap-2">
-                <Gift className="w-5 h-5" /> Inventory
-              </h2>
-              <div className="space-y-2 max-h-48 overflow-y-auto text-blue-100">
-                {inventory.length === 0 ? <p className="text-blue-200 text-sm italic">Empty</p> : inventory.map((item, i) => <div key={i}>• {item}</div>)}
+              {/* Minimap overlay - top left */}
+              <div className="absolute top-2 left-2 opacity-90 hover:opacity-100 transition-opacity">
+                <Minimap tiles={tiles} player={player} size={120} />
               </div>
-            </div>
 
-            <div className="bg-slate-700 rounded-lg p-4 border-2 border-blue-600">
-              <h3 className="text-lg font-bold text-blue-300 mb-2 flex items-center gap-2">
-                <Search className="w-5 h-5" /> Actions
-              </h3>
-              <div className="grid grid-cols-3 gap-2">
-                <div></div>
-                <button onClick={() => tryMove(0, -1)} className="bg-blue-600 hover:bg-blue-500 text-white p-3 rounded font-bold">
-                  ↑
-                </button>
-                <div></div>
-                <button onClick={() => tryMove(-1, 0)} className="bg-blue-600 hover:bg-blue-500 text-white p-3 rounded font-bold">
-                  ←
-                </button>
-                <div className="bg-slate-600 rounded flex items-center justify-center text-2xl">👤</div>
-                <button onClick={() => tryMove(1, 0)} className="bg-blue-600 hover:bg-blue-500 text-white p-3 rounded font-bold">
-                  →
-                </button>
-                <div></div>
-                <button onClick={() => tryMove(0, 1)} className="bg-blue-600 hover:bg-blue-500 text-white p-3 rounded font-bold">
-                  ↓
-                </button>
-                <div></div>
+              {/* Compass overlay - top right */}
+              <div className="absolute top-2 right-2 opacity-90 hover:opacity-100 transition-opacity">
+                <CompassHUD facing={player.facing} size={70} />
               </div>
-              <button onClick={searchAround} className="mt-3 w-full bg-purple-600 hover:bg-purple-500 text-white font-bold py-2 rounded">
-                Search nearby
-              </button>
-            </div>
-          </div>
 
-          <div className="bg-slate-700 rounded-lg p-4 border-2 border-blue-600">
-            <h2 className="text-xl font-bold text-blue-300 mb-3 flex items-center gap-2">
-              <Map className="w-5 h-5" /> Dungeon Map
-            </h2>
-            <div className="bg-slate-950 p-3 rounded border-2 border-slate-800">
-              <DungeonCanvas ref={canvasRef} tiles={tiles} player={player} combat={combat} tileSize={TILE_SIZE} />
-              <div className="mt-3 grid grid-cols-2 md:grid-cols-3 gap-2 text-xs text-blue-200">
-                {legendItems.map((item) => (
-                  <div key={item.label} className="flex items-center gap-2">
-                    <div className="w-9 h-6 rounded-sm relative overflow-hidden" style={item.style}>
-                      {item.marker === 'door' && (
-                        <div className="absolute inset-1 rounded-sm border border-amber-900 bg-amber-200/80" />
-                      )}
-                      {item.marker === 'secret' && (
-                        <div className="absolute inset-1 rounded-sm border border-sky-300 border-dashed" />
-                      )}
-                      {item.marker === 'trap' && (
-                        <div className="absolute inset-0 flex items-center justify-center text-amber-400 text-[11px] leading-none">▲</div>
-                      )}
-                    </div>
-                    <span>{item.label}</span>
+              {/* Stats overlay - bottom left */}
+              <div className="absolute bottom-2 left-2 bg-slate-900/80 rounded-lg p-2 text-sm">
+                <div className="flex items-center gap-3 text-slate-200">
+                  <div className="flex items-center gap-1">
+                    <Heart className="w-4 h-4 text-red-400" />
+                    <span className={player.hp < player.maxHP * 0.3 ? 'text-red-400 font-bold' : ''}>
+                      {player.hp}/{player.maxHP}
+                    </span>
                   </div>
-                ))}
+                  <div className="flex items-center gap-1">
+                    <Sparkles className="w-4 h-4 text-yellow-400" />
+                    <span>{player.gold}</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Combat indicator overlay - bottom center */}
+              {combat.active && combat.monsterId && (
+                <div className="absolute bottom-2 left-1/2 transform -translate-x-1/2 bg-red-900/90 rounded-lg px-4 py-2 border border-red-600">
+                  <div className="text-red-100 text-center text-sm">
+                    <span className="font-bold">COMBAT!</span>
+                    {' - Press SPACE to attack'}
+                  </div>
+                </div>
+              )}
+
+              {/* Death overlay */}
+              {player.hp <= 0 && (
+                <div className="absolute inset-0 bg-black/80 flex items-center justify-center">
+                  <div className="text-center">
+                    <div className="text-4xl mb-2">💀</div>
+                    <h3 className="text-2xl font-bold text-red-400 mb-2">DEFEATED</h3>
+                    <p className="text-slate-400 mb-4">Your journey ends here...</p>
+                    <button
+                      onClick={restartGame}
+                      className="bg-blue-600 hover:bg-blue-500 text-white font-bold py-2 px-6 rounded-lg"
+                    >
+                      Try Again
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Controls */}
+            <div className="bg-slate-700 rounded-lg p-3 border border-slate-600">
+              <div className="flex flex-wrap items-center justify-center gap-2">
+                {/* Turn Left */}
+                <button
+                  onClick={handleTurnLeft}
+                  className="bg-slate-600 hover:bg-slate-500 text-white p-2 rounded flex items-center gap-1 text-sm"
+                  title="Turn Left (Q)"
+                >
+                  <RotateCcw className="w-4 h-4" />
+                  <span className="hidden sm:inline">Q</span>
+                </button>
+
+                {/* Movement cluster */}
+                <div className="flex flex-col items-center gap-1">
+                  <button
+                    onClick={moveForward}
+                    className="bg-blue-600 hover:bg-blue-500 text-white p-2 rounded"
+                    title="Move Forward (W)"
+                  >
+                    <ArrowUp className="w-5 h-5" />
+                  </button>
+                  <div className="flex gap-1">
+                    <button
+                      onClick={strafeLeft}
+                      className="bg-slate-600 hover:bg-slate-500 text-white p-2 rounded"
+                      title="Strafe Left (A)"
+                    >
+                      <ArrowLeft className="w-5 h-5" />
+                    </button>
+                    <button
+                      onClick={moveBackward}
+                      className="bg-blue-600 hover:bg-blue-500 text-white p-2 rounded"
+                      title="Move Backward (S)"
+                    >
+                      <ArrowDown className="w-5 h-5" />
+                    </button>
+                    <button
+                      onClick={strafeRight}
+                      className="bg-slate-600 hover:bg-slate-500 text-white p-2 rounded"
+                      title="Strafe Right (D)"
+                    >
+                      <ArrowRight className="w-5 h-5" />
+                    </button>
+                  </div>
+                </div>
+
+                {/* Turn Right */}
+                <button
+                  onClick={handleTurnRight}
+                  className="bg-slate-600 hover:bg-slate-500 text-white p-2 rounded flex items-center gap-1 text-sm"
+                  title="Turn Right (E)"
+                >
+                  <span className="hidden sm:inline">E</span>
+                  <RotateCw className="w-4 h-4" />
+                </button>
+
+                {/* Divider */}
+                <div className="w-px h-10 bg-slate-500 mx-2 hidden sm:block" />
+
+                {/* Action buttons */}
+                <button
+                  onClick={searchAround}
+                  className="bg-purple-600 hover:bg-purple-500 text-white px-3 py-2 rounded flex items-center gap-1 text-sm"
+                  title="Search (F)"
+                >
+                  <Search className="w-4 h-4" />
+                  <span>Search</span>
+                </button>
+
+                {combat.active && (
+                  <button
+                    onClick={resolvePlayerAttack}
+                    className="bg-red-600 hover:bg-red-500 text-white px-3 py-2 rounded flex items-center gap-1 text-sm font-bold animate-pulse"
+                    title="Attack (Space)"
+                  >
+                    <Sword className="w-4 h-4" />
+                    <span>Attack!</span>
+                  </button>
+                )}
+              </div>
+
+              {/* Key hints */}
+              <div className="mt-2 text-center text-xs text-slate-400">
+                <span className="hidden sm:inline">W/S: Move | A/D: Strafe | Q/E: Turn | F: Search | SPACE: Attack</span>
+                <span className="sm:hidden">Use buttons or keyboard</span>
               </div>
             </div>
           </div>
 
-          <div className="bg-slate-700 rounded-lg p-4 border-2 border-blue-600 flex flex-col h-full">
-            <h2 className="text-xl font-bold text-blue-300 mb-3">📜 Game Log</h2>
-            <div
-              ref={logContainerRef}
-              className="bg-slate-900 rounded p-3 flex-1 overflow-y-auto text-sm text-blue-100 space-y-1"
-            >
-              {log.map((entry, i) => (
-                <div key={i} className="border-b border-slate-700 pb-1">
-                  {entry}
+          {/* Right Sidebar */}
+          <div className="space-y-3">
+            {/* Stats Panel */}
+            <div className="bg-slate-700 rounded-lg p-3 border border-slate-600">
+              <h2 className="text-lg font-bold text-slate-300 mb-2 flex items-center gap-2">
+                <Heart className="w-4 h-4" /> Hero Stats
+              </h2>
+              <div className="grid grid-cols-2 gap-2 text-sm">
+                <div className="flex items-center gap-2 text-slate-200">
+                  <Heart className="w-4 h-4 text-red-400" />
+                  <span>HP: {player.hp}/{player.maxHP}</span>
                 </div>
-              ))}
-              <div ref={logEndRef} />
+                <div className="flex items-center gap-2 text-slate-200">
+                  <Sword className="w-4 h-4 text-orange-400" />
+                  <span>ATK: {player.atk}</span>
+                </div>
+                <div className="flex items-center gap-2 text-slate-200">
+                  <Shield className="w-4 h-4 text-cyan-400" />
+                  <span>DEF: {player.def}</span>
+                </div>
+                <div className="flex items-center gap-2 text-slate-200">
+                  <Sparkles className="w-4 h-4 text-yellow-400" />
+                  <span>Gold: {player.gold}</span>
+                </div>
+              </div>
             </div>
 
+            {/* Combat Panel */}
             {combat.active && combat.monsterId && (
-              <div className="mt-4 bg-red-900 rounded p-3 border-2 border-red-600">
-                <h3 className="font-bold text-red-200 mb-2">⚔️ Combat!</h3>
+              <div className="bg-red-900/50 rounded-lg p-3 border border-red-600">
+                <h3 className="font-bold text-red-200 mb-2 flex items-center gap-2">
+                  <Sword className="w-4 h-4" /> Combat
+                </h3>
                 {(() => {
                   const instance = game.monstersById[combat.monsterId!];
                   const archetype = instance ? game.archetypesById[instance.archetypeId] : null;
                   return (
-                    <div className="text-red-100 mb-2">
-                      <div className="font-bold">{archetype?.name ?? 'Monster'}</div>
-                      <div>HP: {instance?.hp ?? '?'} / {archetype?.maxHP ?? '?'}</div>
-                      <div>ATK: {archetype?.atk ?? '?'} | DEF: {archetype?.def ?? '?'}</div>
+                    <div className="text-sm">
+                      <div className="font-bold text-red-100">{archetype?.name ?? 'Monster'}</div>
+                      <div className="text-red-200">
+                        HP: {instance?.hp ?? '?'} / {archetype?.maxHP ?? '?'}
+                      </div>
+                      <div className="text-red-300 text-xs">
+                        ATK: {archetype?.atk ?? '?'} | DEF: {archetype?.def ?? '?'}
+                      </div>
+                      {/* HP Bar */}
+                      <div className="mt-2 h-2 bg-red-950 rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-red-500 transition-all duration-300"
+                          style={{ width: `${((instance?.hp ?? 0) / (archetype?.maxHP ?? 1)) * 100}%` }}
+                        />
+                      </div>
                     </div>
                   );
                 })()}
-                <button onClick={resolvePlayerAttack} className="w-full bg-red-600 hover:bg-red-500 text-white font-bold py-2 rounded">
-                  Attack! (Roll Dice)
-                </button>
               </div>
             )}
 
-            {player.hp <= 0 && (
-              <div className="mt-4 bg-gray-900 rounded p-4 border-2 border-gray-600 text-center">
-                <h3 className="font-bold text-gray-200 text-xl mb-2">💀 Defeated 💀</h3>
-                <p className="text-gray-300 mb-3">Your journey ends here...</p>
-                <button onClick={restartGame} className="bg-blue-600 hover:bg-blue-500 text-white font-bold py-2 px-4 rounded">
-                  Try Again
-                </button>
+            {/* Inventory */}
+            <div className="bg-slate-700 rounded-lg p-3 border border-slate-600">
+              <h2 className="text-lg font-bold text-slate-300 mb-2 flex items-center gap-2">
+                <Gift className="w-4 h-4" /> Inventory
+              </h2>
+              <div className="text-sm text-slate-300 max-h-24 overflow-y-auto">
+                {inventory.length === 0 ? (
+                  <p className="text-slate-400 italic">Empty</p>
+                ) : (
+                  inventory.map((item, i) => <div key={i}>• {item}</div>)
+                )}
               </div>
-            )}
+            </div>
+
+            {/* Game Log */}
+            <div className="bg-slate-700 rounded-lg p-3 border border-slate-600 flex-1">
+              <h2 className="text-lg font-bold text-slate-300 mb-2">Game Log</h2>
+              <div
+                ref={logContainerRef}
+                className="bg-slate-900 rounded p-2 h-48 overflow-y-auto text-xs text-slate-300 space-y-1"
+              >
+                {log.map((entry, i) => (
+                  <div key={i} className="border-b border-slate-700 pb-1">
+                    {entry}
+                  </div>
+                ))}
+                <div ref={logEndRef} />
+              </div>
+            </div>
           </div>
         </div>
       </div>
