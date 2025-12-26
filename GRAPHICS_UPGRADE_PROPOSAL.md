@@ -355,6 +355,353 @@ For this Norse Dungeon Crawler, I recommend **Option 3: Advanced Procedural Grap
 
 ---
 
+---
+
+## Option 4: First-Person Dungeon Crawler
+
+**Concept**: Transform the game into a classic first-person dungeon crawler like Legend of Grimrock, Eye of the Beholder, or Dungeon Master - with grid-based step movement and 90-degree turns.
+
+### Why Grid-Based First Person?
+
+The existing tile-based architecture is **perfectly suited** for this style:
+
+| Current System | First-Person Adaptation |
+|----------------|------------------------|
+| 16x16 tile grid | Same grid, viewed from inside |
+| Cardinal movement (WASD) | Step forward/back, strafe left/right |
+| Turn-based combat | Natural fit for step-based movement |
+| Fog of war | Becomes line-of-sight down corridors |
+| Tile types (wall/room/door) | Rendered as 3D surfaces |
+
+### Rendering Approaches
+
+#### Approach A: Raycasting Engine (Canvas 2D)
+Classic Wolfenstein 3D-style rendering using the existing Canvas API.
+
+```
+Pros:
+- No new dependencies
+- Retro aesthetic fits Norse theme
+- Lightweight, runs everywhere
+- Educational/interesting to implement
+
+Cons:
+- Walls only (no floor/ceiling textures without more work)
+- Limited visual fidelity
+- No true 3D objects
+```
+
+**Technical Implementation:**
+```typescript
+// Core raycasting loop (simplified)
+for (let screenX = 0; screenX < screenWidth; screenX++) {
+  const rayAngle = playerAngle - FOV/2 + (screenX / screenWidth) * FOV;
+  const { distance, tileType, side } = castRay(playerPos, rayAngle, tiles);
+  const wallHeight = screenHeight / distance;
+  drawVerticalStrip(screenX, wallHeight, tileType, side);
+}
+```
+
+#### Approach B: WebGL/Three.js 3D (Recommended)
+True 3D rendering with the grid-based movement system.
+
+```
+Pros:
+- Modern visuals with lighting/shadows
+- Floor, ceiling, and wall textures
+- 3D monster/item models or billboarded sprites
+- Particle effects, fog, post-processing
+
+Cons:
+- New dependency (Three.js ~150KB)
+- More complex codebase
+- Higher device requirements
+```
+
+### Visual Features
+
+| Feature | Description |
+|---------|-------------|
+| **Textured Walls** | Procedural or image-based stone/ice textures |
+| **Floor/Ceiling** | Tiled patterns with distance fog |
+| **Torch Lighting** | Flickering point lights on walls |
+| **Billboarded Sprites** | Monsters rendered as 2D images facing player |
+| **Door Animations** | Doors slide up/swing open when approached |
+| **Atmospheric Fog** | Distance-based darkness enhances mystery |
+| **Screen Effects** | Damage vignette, ice/fire screen overlays |
+| **Minimap Overlay** | Small top-down map in corner |
+
+### Movement System
+
+```
+┌─────────────────────────────────────┐
+│         FIRST-PERSON VIEW          │
+│                                     │
+│     ┌───────────────────────┐      │
+│     │                       │      │
+│     │    CORRIDOR AHEAD     │      │
+│     │                       │      │
+│     │   [MONSTER SPRITE]    │      │
+│     │                       │      │
+│     └───────────────────────┘      │
+│                                     │
+│  [Q Turn Left]  [E Turn Right]     │
+│  [W Forward] [S Back] [A/D Strafe] │
+└─────────────────────────────────────┘
+```
+
+**Player State Changes:**
+```typescript
+interface PlayerState {
+  x: number;
+  y: number;
+  facing: 'north' | 'south' | 'east' | 'west';  // NEW
+  hp: number;
+  maxHP: number;
+  atk: number;
+  def: number;
+  gold: number;
+}
+
+// Movement becomes relative to facing direction
+function moveForward(player: PlayerState): Position {
+  const deltas = {
+    north: { dx: 0, dy: -1 },
+    south: { dx: 0, dy: 1 },
+    east:  { dx: 1, dy: 0 },
+    west:  { dx: -1, dy: 0 }
+  };
+  return { x: player.x + deltas[player.facing].dx,
+           y: player.y + deltas[player.facing].dy };
+}
+```
+
+### Architecture Changes
+
+```
+src/
+├── renderer/
+│   ├── FirstPersonRenderer.tsx   # Main 3D/raycast view
+│   ├── RaycastEngine.ts          # Option A: Canvas raycasting
+│   ├── ThreeJSScene.ts           # Option B: Three.js setup
+│   ├── WallGeometry.ts           # Wall mesh generation
+│   ├── SpriteManager.ts          # Billboard monster sprites
+│   └── LightingSystem.ts         # Torch/ambient lighting
+├── components/
+│   ├── CompassHUD.tsx            # Direction indicator
+│   ├── Minimap.tsx               # Top-down overlay map
+│   └── FirstPersonUI.tsx         # Combat/stats overlay
+├── systems/
+│   ├── MovementSystem.ts         # Grid-step movement logic
+│   ├── TurnAnimation.ts          # Smooth 90° turn transitions
+│   └── ViewBobbing.ts            # Walking animation
+└── assets/
+    ├── textures/                 # Wall/floor textures
+    └── sprites/                  # Monster billboard images
+```
+
+### New UI Layout
+
+```
+┌────────────────────────────────────────────────────────┐
+│ ┌──────┐                                    ┌────────┐ │
+│ │MINI  │     FIRST PERSON 3D VIEW          │ STATS  │ │
+│ │MAP   │                                    │ HP: 40 │ │
+│ │      │    ████████████████████           │ ATK: 6 │ │
+│ │  @   │    █                  █           │ DEF: 4 │ │
+│ │      │    █   STONE WALLS    █           │        │ │
+│ └──────┘    █                  █           │ Gold:  │ │
+│             █    [GOBLIN]      █           │   125  │ │
+│             █                  █           └────────┘ │
+│ ┌─────┐     █                  █                      │
+│ │  N  │     ████████████████████                      │
+│ │W ◆ E│                                               │
+│ │  S  │     ─────────────────────────                │
+│ └─────┘     │ A wild Goblin appears! │                │
+│ COMPASS     │ Press SPACE to attack  │                │
+│             ─────────────────────────                │
+├────────────────────────────────────────────────────────┤
+│  [Q]◄Turn   [W]Forward   [E]Turn►   [SPACE]Attack    │
+└────────────────────────────────────────────────────────┘
+```
+
+### Monster Rendering Options
+
+#### Option 1: Billboarded 2D Sprites
+Classic approach - 2D images always face the player.
+
+```typescript
+// Sprite always faces camera
+const spriteDirection = Math.atan2(
+  player.y - monster.y,
+  player.x - monster.x
+);
+drawSprite(monster.sprite, monster.pos, spriteDirection);
+```
+
+#### Option 2: Simple 3D Models
+Low-poly procedural meshes for monsters.
+
+```typescript
+// Procedural monster mesh
+const goblinGeometry = new THREE.Group();
+goblinGeometry.add(createBody('#4ade80'));
+goblinGeometry.add(createHead('#22c55e'));
+goblinGeometry.add(createEyes('#ffffff'));
+```
+
+#### Option 3: Animated Sprite Sheets
+Multiple angles (front, side, back) for more realistic rotation.
+
+### Smooth Transitions
+
+Grid-based doesn't mean choppy! Add smooth interpolation:
+
+```typescript
+// Smooth movement between tiles
+const STEP_DURATION = 200; // ms
+
+function animateStep(from: Position, to: Position) {
+  const startTime = performance.now();
+
+  function update(time: number) {
+    const progress = (time - startTime) / STEP_DURATION;
+    if (progress >= 1) {
+      setPosition(to);
+      return;
+    }
+
+    const eased = easeOutCubic(progress);
+    setPosition({
+      x: lerp(from.x, to.x, eased),
+      y: lerp(from.y, to.y, eased)
+    });
+    requestAnimationFrame(update);
+  }
+
+  requestAnimationFrame(update);
+}
+
+// Smooth 90° turn
+function animateTurn(fromAngle: number, toAngle: number) {
+  // Similar interpolation for rotation
+}
+```
+
+### View Bobbing & Head Movement
+
+```typescript
+const VIEW_BOB_INTENSITY = 0.05;
+const VIEW_BOB_SPEED = 8;
+
+function calculateViewBob(walkProgress: number): number {
+  return Math.sin(walkProgress * VIEW_BOB_SPEED) * VIEW_BOB_INTENSITY;
+}
+```
+
+### Technical Effort Comparison
+
+| Component | Raycasting (A) | Three.js (B) |
+|-----------|----------------|--------------|
+| Setup complexity | Medium | Medium |
+| Wall rendering | Medium | Low (built-in) |
+| Floor/ceiling | High | Low |
+| Lighting | Manual | Built-in |
+| Sprites | Medium | Low |
+| Performance | Excellent | Good |
+| Visual quality | Retro | Modern |
+| Bundle size | +0KB | +150KB |
+
+### Implementation Phases
+
+**Phase 1: Core Renderer** (Choose A or B)
+- Basic first-person view of walls
+- Player position and facing direction
+- Forward/backward movement
+
+**Phase 2: Full Movement**
+- Turn left/right (Q/E)
+- Strafe (A/D)
+- Smooth transitions and view bobbing
+- Collision detection
+
+**Phase 3: Visual Polish**
+- Wall textures (procedural or images)
+- Floor/ceiling rendering
+- Torch lighting with flicker
+- Distance fog
+
+**Phase 4: Entities**
+- Monster sprites/models
+- Treasure chest visuals
+- Door opening animations
+- Trap visual indicators
+
+**Phase 5: UI Integration**
+- Minimap overlay
+- Compass direction indicator
+- Combat UI adaptation
+- Stats/inventory panels
+
+**Phase 6: Atmosphere**
+- Ambient audio (dripping water, wind)
+- Footstep sounds
+- Monster growls in distance
+- Musical score
+
+### Code Reuse Assessment
+
+| Existing Code | Reusability |
+|---------------|-------------|
+| `dungeonGen.ts` | 100% - No changes needed |
+| `visibility.ts` | 80% - Adapt for forward cone |
+| `types.ts` | 95% - Add `facing` to PlayerState |
+| `App.tsx` game logic | 70% - Movement/combat core works |
+| `DungeonCanvas.tsx` | 0% - Replace entirely |
+
+### Pros & Cons
+
+| Pros | Cons |
+|------|------|
+| Immersive atmosphere | Loses tactical overview |
+| Classic dungeon crawler feel | More disorienting for some players |
+| Unique among modern web games | Minimap becomes essential |
+| Existing grid system fits perfectly | Combat UI needs redesign |
+| Leverages all dungeon generation | Higher implementation effort |
+
+### Hybrid Approach: Toggle View Mode
+
+Keep both perspectives! Let players switch:
+
+```typescript
+type ViewMode = 'topdown' | 'firstperson';
+
+function GameRenderer({ mode }: { mode: ViewMode }) {
+  return mode === 'topdown'
+    ? <DungeonCanvas {...props} />
+    : <FirstPersonRenderer {...props} />;
+}
+
+// Toggle with TAB key
+useKeyPress('Tab', () => toggleViewMode());
+```
+
+---
+
+## Updated Comparison Matrix
+
+| Criteria | Option 1 (WebGL 3D) | Option 2 (Pixel Art) | Option 3 (Procedural+) | Option 4 (First Person) |
+|----------|---------------------|----------------------|------------------------|-------------------------|
+| **Visual Impact** | Highest | High | Medium-High | Very High |
+| **Development Effort** | Highest | Medium | Medium-High | High |
+| **Asset Requirements** | Low | High | None | Low-Medium |
+| **Immersion** | High | Medium | Medium | Highest |
+| **Code Reuse** | Low | High | Highest | Medium |
+| **Uniqueness** | Modern 3D roguelike | Classic retro | Distinctive procedural | Classic dungeon crawler |
+| **Mobile Friendly** | Challenging | Excellent | Excellent | Moderate |
+
+---
+
 ## Next Steps
 
 Choose an option (or hybrid approach) and I can begin implementation with:
