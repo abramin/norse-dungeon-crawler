@@ -60,9 +60,12 @@ export interface CombatState {
   lastHitAt?: number;
 }
 
+export type FacingDirection = 'north' | 'south' | 'east' | 'west';
+
 export interface PlayerState {
   x: number;
   y: number;
+  facing: FacingDirection;
   hp: number;
   maxHP: number;
   atk: number;
